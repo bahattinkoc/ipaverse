@@ -146,7 +146,7 @@ struct LoginView: View {
             LoadingButton(
                 title: viewModel.showAuthCodeField ? "Verify" : "Log in",
                 isLoading: viewModel.isLoading,
-                isEnabled: !viewModel.email.isEmpty && !viewModel.password.isEmpty
+                isEnabled: viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty)
             ) {
                 if viewModel.showAuthCodeField {
                     await viewModel.handle2FA(viewModel.authCode)
@@ -156,11 +156,22 @@ struct LoginView: View {
             }
 
             if viewModel.showAuthCodeField {
-                Button("Send different code") {
-                    // TODO: - Resend code action
+                VStack(spacing: 12) {
+                    Button("Resend verification code") {
+                        Task {
+                            await viewModel.resendAuthCode()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.blue)
+                    .disabled(viewModel.isLoading)
+
+                    Button("Change Password") {
+                        viewModel.resetToLoginForm()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.orange)
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(.blue)
             }
         }
     }

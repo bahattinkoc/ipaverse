@@ -12,7 +12,7 @@ import Combine
 final class LoginViewModel: ObservableObject {
     // MARK: - Published Properties
     @Published var loginState: LoginState = .idle
-    @Published var email: String = "bahattink3458@gmail.com"
+    @Published var email: String = ""
     @Published var password: String = ""
     @Published var authCode: String = ""
     @Published var rememberMe: Bool = true
@@ -77,6 +77,11 @@ final class LoginViewModel: ObservableObject {
             loginState = .requires2FA
             errorMessage = "Two-factor authentication code required"
 
+        } catch LoginError.invalidCredentials {
+            print("❌ Invalid credentials")
+            loginState = .error("Invalid Apple ID or password")
+            errorMessage = "Invalid Apple ID or password"
+
         } catch {
             print("❌ Login error: \(error)")
             loginState = .error(error.localizedDescription)
@@ -88,6 +93,60 @@ final class LoginViewModel: ObservableObject {
         print("2FA code received: \(code)")
         authCode = code
         await login()
+    }
+
+    func resetToLoginForm() {
+        print("🔄 Resetting to login form")
+        showAuthCodeField = false
+        authCode = ""
+        errorMessage = ""
+        loginState = .idle
+    }
+    
+    func resendAuthCode() async {
+        print("🔄 Resending auth code...")
+        errorMessage = ""
+        authCode = ""
+
+        let credentials = LoginCredentials(
+            email: email,
+            password: password,
+            authCode: nil,
+            rememberMe: rememberMe
+        )
+        
+        do {
+            let account = try await appStoreService.login(credentials: credentials)
+            
+            print("✅ Resend successful!")
+            print("👤 User: \(account.name)")
+            
+            if rememberMe {
+                try keychainService.saveCredentials(credentials)
+                print("💾 Credentials saved to keychain")
+            }
+            
+            try keychainService.saveAccount(account)
+            print("💾 Account saved to keychain")
+            
+            loginState = .success(account)
+            
+        } catch LoginError.twoFactorRequired {
+            print("🔐 2FA required after resend")
+            showAuthCodeField = true
+            loginState = .requires2FA
+            errorMessage = "New verification code sent. Please check your device."
+            
+        } catch LoginError.invalidCredentials {
+            print("❌ Invalid credentials during resend")
+            loginState = .error("Invalid Apple ID or password")
+            errorMessage = "Invalid Apple ID or password"
+            
+        } catch {
+            print("❌ Resend error: \(error)")
+            loginState = .error(error.localizedDescription)
+            errorMessage = error.localizedDescription
+        }
     }
 
     func logout() async {
@@ -118,6 +177,13 @@ final class LoginViewModel: ObservableObject {
             .store(in: &cancellables)
 
         $password
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.errorMessage = ""
+            }
+            .store(in: &cancellables)
+
+        $authCode
             .dropFirst()
             .sink { [weak self] _ in
                 self?.errorMessage = ""
@@ -164,7 +230,7 @@ final class LoginViewModel: ObservableObject {
     }
 
     private func resetForm() {
-        email = "bahattink3458@gmail.com"
+        email = ""
         password = ""
         authCode = ""
         rememberMe = true

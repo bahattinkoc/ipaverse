@@ -310,16 +310,28 @@ final class AppStoreService: AppStoreServiceProtocol {
         let failureType = plist["failureType"] as? String ?? ""
         let customerMessage = plist["customerMessage"] as? String ?? ""
 
-        if attempt == 1 && failureType == AppStoreConstants.failureTypeInvalidCredentials {
-            return LoginParseResult(shouldRetry: true)
-        } else if failureType.isEmpty && authCode == nil && customerMessage == AppStoreConstants.customerMessageBadLogin {
-            throw LoginError.twoFactorRequired
-        } else if failureType.isEmpty && customerMessage == AppStoreConstants.customerMessageAccountDisabled {
+        if failureType == AppStoreConstants.failureTypeInvalidCredentials {
+            throw LoginError.invalidCredentials
+        }
+
+        if customerMessage == AppStoreConstants.customerMessageAccountDisabled {
             throw LoginError.accountLocked
-        } else if !failureType.isEmpty {
+        }
+
+        if failureType.isEmpty && authCode == nil && customerMessage == AppStoreConstants.customerMessageBadLogin {
+            throw LoginError.twoFactorRequired
+        }
+
+        if failureType.isEmpty && authCode != nil && customerMessage == AppStoreConstants.customerMessageBadLogin {
+            throw LoginError.twoFactorRequired
+        }
+
+        if !failureType.isEmpty {
             let message = customerMessage.isEmpty ? "Unknown error" : customerMessage
             throw LoginError.unknownError(message)
-        } else if statusCode != 200 || plist["passwordToken"] as? String == nil || plist["dsPersonId"] as? String == nil {
+        }
+
+        if statusCode != 200 || plist["passwordToken"] as? String == nil || plist["dsPersonId"] as? String == nil {
             throw LoginError.networkError
         }
 
