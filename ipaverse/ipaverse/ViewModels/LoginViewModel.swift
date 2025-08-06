@@ -91,12 +91,20 @@ final class LoginViewModel: ObservableObject {
     }
 
     func logout() async {
+        print("🔓 ViewModel logout is starting...")
+
         do {
-            try keychainService.clearCredentials()
+            try await appStoreService.logout()
+
             loginState = .idle
             resetForm()
+
+            print("✅ ViewModel logout completed")
+
         } catch {
-            errorMessage = "An error occurred while logging out."
+            print("❌ ViewModel logout error: \(error)")
+            errorMessage = "An error occurred while logging out.: \(error.localizedDescription)"
+            loginState = .error(error.localizedDescription)
         }
     }
 
@@ -154,7 +162,7 @@ final class LoginViewModel: ObservableObject {
 
         return true
     }
-    
+
     private func resetForm() {
         email = "bahattink3458@gmail.com"
         password = ""

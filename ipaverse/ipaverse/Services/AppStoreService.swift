@@ -132,7 +132,36 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Logout
     func logout() async throws {
-        // TODO: - Logout logic
+        print("🔓 Logout is starting...")
+
+        do {
+            let keychain = KeychainService()
+            try keychain.clearCredentials()
+
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: "ipaverse.account"
+            ]
+
+            let status = SecItemDelete(query as CFDictionary)
+            if status != errSecSuccess && status != errSecItemNotFound {
+                print("⚠️ Account keychain deletion error: \(status)")
+            }
+
+            if let cookies = HTTPCookieStorage.shared.cookies {
+                for cookie in cookies {
+                    if cookie.domain.contains("apple.com") || cookie.domain.contains("itunes.com") {
+                        HTTPCookieStorage.shared.deleteCookie(cookie)
+                    }
+                }
+            }
+
+            print("✅ Logout successful - all data cleared")
+
+        } catch {
+            print("❌ Logout error: \(error)")
+            throw LoginError.unknownError("Logout failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Private Methods
