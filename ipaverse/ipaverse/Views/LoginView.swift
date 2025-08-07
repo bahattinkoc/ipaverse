@@ -39,6 +39,13 @@ struct LoginView: View {
             }
             .background(.background)
             .navigationTitle("")
+            .toast(
+                message: viewModel.toastMessage,
+                isPresented: Binding(
+                    get: { !viewModel.toastMessage.isEmpty },
+                    set: { if !$0 { viewModel.toastMessage = "" } }
+                )
+            )
         }
     }
 

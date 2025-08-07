@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SearchView: View {
     let account: Account
+    @EnvironmentObject var loginViewModel: LoginViewModel
     @State private var searchText = ""
     @State private var searchResults: [AppStoreApp] = []
     @State private var isLoading = false
@@ -205,8 +206,12 @@ struct SearchView: View {
                 }
 
             } catch {
-                await MainActor.run {
-                    errorMessage = "Download failed: \(error.localizedDescription)"
+                if let loginError = error as? LoginError, loginError == .tokenExpired {
+                    await loginViewModel.logout(withMessage: "Session expired. Please login again.")
+                } else {
+                    await MainActor.run {
+                        errorMessage = "Download failed: \(error.localizedDescription)"
+                    }
                 }
             }
         }

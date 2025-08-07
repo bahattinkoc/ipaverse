@@ -18,6 +18,7 @@ final class LoginViewModel: ObservableObject {
     @Published var rememberMe: Bool = true
     @Published var showAuthCodeField: Bool = false
     @Published var errorMessage: String = ""
+    @Published var toastMessage: String = ""
 
     // MARK: - Services
     private let keychainService: KeychainServiceProtocol
@@ -149,7 +150,7 @@ final class LoginViewModel: ObservableObject {
         }
     }
 
-    func logout() async {
+    func logout(withMessage message: String? = nil) async {
         print("🔓 ViewModel logout is starting...")
 
         do {
@@ -157,6 +158,10 @@ final class LoginViewModel: ObservableObject {
 
             loginState = .idle
             resetForm()
+            
+            if let message {
+                toastMessage = message
+            }
 
             print("✅ ViewModel logout completed")
 

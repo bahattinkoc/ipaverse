@@ -14,7 +14,12 @@ struct LoginCredentials: Codable {
     let authCode: String?
     let rememberMe: Bool
     
-    init(email: String = "", password: String = "", authCode: String? = nil, rememberMe: Bool = true) {
+    init(
+        email: String = "",
+        password: String = "",
+        authCode: String? = nil,
+        rememberMe: Bool = true
+    ) {
         self.email = email
         self.password = password
         self.authCode = authCode
@@ -57,42 +62,33 @@ enum LoginState: Equatable {
     
     static func == (lhs: LoginState, rhs: LoginState) -> Bool {
         switch (lhs, rhs) {
-        case (.idle, .idle):
-            return true
-        case (.loading, .loading):
-            return true
-        case (.requires2FA, .requires2FA):
-            return true
-        case (.success(let lhsAccount), .success(let rhsAccount)):
-            return lhsAccount.email == rhsAccount.email
-        case (.error(let lhsMessage), .error(let rhsMessage)):
-            return lhsMessage == rhsMessage
-        default:
-            return false
+        case (.idle, .idle): true
+        case (.loading, .loading): true
+        case (.requires2FA, .requires2FA): true
+        case (.success(let lhsAccount), .success(let rhsAccount)): lhsAccount.email == rhsAccount.email
+        case (.error(let lhsMessage), .error(let rhsMessage)): lhsMessage == rhsMessage
+        default: false
         }
     }
 }
 
 // MARK: - Login Error
-enum LoginError: LocalizedError {
+enum LoginError: LocalizedError, Equatable {
     case invalidCredentials
     case networkError
     case twoFactorRequired
     case accountLocked
+    case tokenExpired
     case unknownError(String)
     
     var errorDescription: String? {
         switch self {
-        case .invalidCredentials:
-            return "Invalid Apple ID or password"
-        case .networkError:
-            return "Network connection error"
-        case .twoFactorRequired:
-            return "Two-factor authentication required"
-        case .accountLocked:
-            return "Account locked"
-        case .unknownError(let message):
-            return message
+        case .invalidCredentials: "Invalid Apple ID or password"
+        case .networkError: "Network connection error"
+        case .twoFactorRequired: "Two-factor authentication required"
+        case .accountLocked: "Account locked"
+        case .tokenExpired: "Session expired. Please login again."
+        case .unknownError(let message): message
         }
     }
 } 

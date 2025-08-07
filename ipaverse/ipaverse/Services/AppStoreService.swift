@@ -268,7 +268,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         if let failureType = plist?["failureType"] as? String {
             if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
-                throw LoginError.unknownError("Password token expired")
+                throw LoginError.tokenExpired
             }
             if failureType == AppStoreConstants.failureTypeTemporarilyUnavailable {
                 throw LoginError.unknownError("Item is temporarily unavailable")
@@ -362,7 +362,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         if let failureType = plist?["failureType"] as? String {
             if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
-                throw LoginError.unknownError("Password token expired")
+                throw LoginError.tokenExpired
             }
             if failureType == AppStoreConstants.failureTypeLicenseNotFound {
                 throw LoginError.unknownError("License required")
