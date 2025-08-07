@@ -35,12 +35,16 @@ struct AppStoreConstants {
 
     static let pricingParameterAppStore = "STDQ"
     static let pricingParameterAppleArcade = "GAME"
+    static let defaultUserAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
 }
 
 protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
     func validateToken(_ token: String) async throws -> Bool
     func logout() async throws
+    func search(term: String, account: Account, limit: Int) async throws -> SearchResult
+    func purchase(app: AppStoreApp, account: Account) async throws
+    func download(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput
 }
 
 final class AppStoreService: AppStoreServiceProtocol {
@@ -98,11 +102,11 @@ final class AppStoreService: AppStoreServiceProtocol {
 
             let account = Account(
                 email: credentials.email,
+                password: credentials.password,
                 name: parseResult.accountName ?? "",
-                storeFront: parseResult.storeFront ?? "143441",
+                storeFront: parseResult.storeFront ?? "",
                 passwordToken: parseResult.passwordToken ?? "",
-                directoryServicesID: parseResult.directoryServicesID ?? "",
-                password: credentials.password
+                directoryServicesID: parseResult.directoryServicesID ?? ""
             )
 
             print("Login successful: \(account.name)")
@@ -164,6 +168,228 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
     }
 
+    // MARK: - Search
+    func search(term: String, account: Account, limit: Int = 5) async throws -> SearchResult {
+        print("🔍 Searching for: \(term) (limit: \(limit))")
+
+        let countryCode = getCountryCodeFromStoreFront(account.storeFront)
+        let urlString = "https://\(AppStoreConstants.iTunesAPIDomain)\(AppStoreConstants.iTunesAPIPathSearch)?entity=software,iPadSoftware&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
+
+        guard let url = URL(string: urlString) else {
+            throw LoginError.networkError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+
+        let searchResult = try JSONDecoder().decode(SearchResult.self, from: data)
+        print("✅ Search completed: \(searchResult.count ?? 0) results found")
+        return searchResult
+    }
+
+    // MARK: - Purchase
+    func purchase(app: AppStoreApp, account: Account) async throws {
+        print("🛒 Purchasing app: \(app.name ?? "")")
+
+        let deviceID = try await getDeviceIdentifier()
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+
+        if let price = app.price, price > 0 {
+            throw LoginError.unknownError("Purchasing paid apps is not supported")
+        }
+
+        do {
+            try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: AppStoreConstants.pricingParameterAppStore)
+        } catch {
+            if error.localizedDescription.contains("temporarily unavailable") {
+                try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: AppStoreConstants.pricingParameterAppleArcade)
+            } else {
+                throw error
+            }
+        }
+
+        print("✅ Purchase completed successfully")
+    }
+
+    private func purchaseWithParams(account: Account, app: AppStoreApp, guid: String, pricingParameters: String) async throws {
+        let url = URL(string: "https://\(AppStoreConstants.privateAppStoreAPIDomain)\(AppStoreConstants.privateAppStoreAPIPathPurchase)")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        request.setValue(account.storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
+        request.setValue(account.passwordToken, forHTTPHeaderField: "X-Token")
+
+        let payload: [String: Any] = [
+            "appExtVrsId": "0",
+            "hasAskedToFulfillPreorder": "true",
+            "buyWithoutAuthorization": "true",
+            "hasDoneAgeCheck": "true",
+            "guid": guid,
+            "needDiv": "0",
+            "origPage": "Software-\(app.id ?? 0)",
+            "origPageLocation": "Buy",
+            "price": "0",
+            "pricingParameters": pricingParameters,
+            "productType": "C",
+            "salableAdamId": app.id ?? 0
+        ]
+
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: payload,
+            format: .xml,
+            options: 0
+        )
+        request.httpBody = plistData
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LoginError.networkError
+        }
+
+        if httpResponse.statusCode == 500 {
+            throw LoginError.unknownError("License already exists")
+        }
+
+        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+
+        if let failureType = plist?["failureType"] as? String {
+            if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
+                throw LoginError.unknownError("Password token expired")
+            }
+            if failureType == AppStoreConstants.failureTypeTemporarilyUnavailable {
+                throw LoginError.unknownError("Item is temporarily unavailable")
+            }
+            if !failureType.isEmpty {
+                let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
+                throw LoginError.unknownError(customerMessage)
+            }
+        }
+
+        if let jingleDocType = plist?["jingleDocType"] as? String,
+           let status = plist?["status"] as? Int {
+            if jingleDocType != "purchaseSuccess" || status != 0 {
+                throw LoginError.unknownError("Failed to purchase app")
+            }
+        }
+    }
+
+    // MARK: - Download
+    func download(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput {
+        print("📥 Starting download for: \(app.name ?? "")")
+
+        var lastError: Error?
+        var purchased = false // TODO: - bunu kullan
+
+        for _ in 1...2 {
+            do {
+                let result = try await performDownload(app: app, account: account, outputPath: outputPath)
+                print("✅ Download completed: \(result.destinationPath)")
+                return result
+
+            } catch {
+                lastError = error
+
+                if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
+                    print("🛒 License required, attempting purchase...")
+                    try await purchase(app: app, account: account)
+                    purchased = true
+                    continue
+                }
+
+                if error.localizedDescription.contains("token expired") {
+                    print("🔄 Token expired, need to re-login")
+                    throw error
+                }
+
+                throw error
+            }
+        }
+
+        throw lastError ?? LoginError.networkError
+    }
+
+    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput {
+        let deviceID = try await getDeviceIdentifier()
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+
+        let downloadURL = "https://\(AppStoreConstants.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(AppStoreConstants.privateAppStoreAPIDomain)\(AppStoreConstants.privateAppStoreAPIPathDownload)?guid=\(guid)"
+
+        guard let url = URL(string: downloadURL) else {
+            throw LoginError.networkError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+
+        let payload: [String: Any] = [
+            "creditDisplay": "",
+            "guid": guid,
+            "salableAdamId": app.id ?? 0
+        ]
+
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: payload,
+            format: .xml,
+            options: 0
+        )
+        request.httpBody = plistData
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let _ = response as? HTTPURLResponse else {
+            throw LoginError.networkError
+        }
+
+        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+
+        if let failureType = plist?["failureType"] as? String {
+            if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
+                throw LoginError.unknownError("Password token expired")
+            }
+            if failureType == AppStoreConstants.failureTypeLicenseNotFound {
+                throw LoginError.unknownError("License required")
+            }
+            if !failureType.isEmpty {
+                let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
+                throw LoginError.unknownError(customerMessage)
+            }
+        }
+
+        guard let items = plist?["songList"] as? [[String: Any]],
+              let firstItem = items.first,
+              let downloadURL = firstItem["URL"] as? String else {
+            throw LoginError.unknownError("Invalid download response")
+        }
+
+        let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
+
+        print("📥 Download URL obtained: \(downloadURL)")
+
+        return DownloadOutput(
+            destinationPath: destinationPath,
+            success: true,
+            error: nil
+        )
+    }
+
     // MARK: - Private Methods
 
     private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, redirectURL: String) throws -> URLRequest {
@@ -199,7 +425,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
 
-        request.setValue("Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
 
         let payload: Data
         switch attempt {
@@ -383,6 +609,50 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         return UUID().uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+    }
+
+    private func getCountryCodeFromStoreFront(_ storeFront: String) -> String {
+        let storeFronts: [String: String] = [
+            "AE": "143481", "AG": "143540", "AI": "143538", "AL": "143575", "AM": "143524",
+            "AO": "143564", "AR": "143505", "AT": "143445", "AU": "143460", "AZ": "143568",
+            "BB": "143541", "BD": "143490", "BE": "143446", "BG": "143526", "BH": "143559",
+            "BM": "143542", "BN": "143560", "BO": "143556", "BR": "143503", "BS": "143539",
+            "BW": "143525", "BY": "143565", "BZ": "143555", "CA": "143455", "CH": "143459",
+            "CI": "143527", "CL": "143483", "CN": "143465", "CO": "143501", "CR": "143495",
+            "CY": "143557", "CZ": "143489", "DE": "143443", "DK": "143458", "DM": "143545",
+            "DO": "143508", "DZ": "143563", "EC": "143509", "EE": "143518", "EG": "143516",
+            "ES": "143454", "FI": "143447", "FR": "143442", "GB": "143444", "GD": "143546",
+            "GE": "143615", "GH": "143573", "GR": "143448", "GT": "143504", "GY": "143553",
+            "HK": "143463", "HN": "143510", "HR": "143494", "HU": "143482", "ID": "143476",
+            "IE": "143449", "IL": "143491", "IN": "143467", "IS": "143558", "IT": "143450",
+            "IQ": "143617", "JM": "143511", "JO": "143528", "JP": "143462", "KE": "143529",
+            "KN": "143548", "KR": "143466", "KW": "143493", "KY": "143544", "KZ": "143517",
+            "LB": "143497", "LC": "143549", "LI": "143522", "LK": "143486", "LT": "143520",
+            "LU": "143451", "LV": "143519", "MD": "143523", "MG": "143531", "MK": "143530",
+            "ML": "143532", "MN": "143592", "MO": "143515", "MS": "143547", "MT": "143521",
+            "MU": "143533", "MV": "143488", "MX": "143468", "MY": "143473", "NE": "143534",
+            "NG": "143561", "NI": "143512", "NL": "143452", "NO": "143457", "NP": "143484",
+            "NZ": "143461", "OM": "143562", "PA": "143485", "PE": "143507", "PH": "143474",
+            "PK": "143477", "PL": "143478", "PT": "143453", "PY": "143513", "QA": "143498",
+            "RO": "143487", "RS": "143500", "RU": "143469", "SA": "143479", "SE": "143456",
+            "SG": "143464", "SI": "143499", "SK": "143496", "SN": "143535", "SR": "143554",
+            "SV": "143506", "TC": "143552", "TH": "143475", "TN": "143536", "TR": "143480",
+            "TT": "143551", "TW": "143470", "TZ": "143572", "UA": "143492", "UG": "143537",
+            "US": "143441", "UY": "143514", "UZ": "143566", "VC": "143550", "VE": "143502",
+            "VG": "143543", "VN": "143471", "YE": "143571", "ZA": "143472"
+        ]
+
+        let parts = storeFront.components(separatedBy: "-")
+        let storeFrontValue = parts.first ?? storeFront
+
+        for (countryCode, sf) in storeFronts {
+            if sf == storeFrontValue {
+                return countryCode.lowercased()
+            }
+        }
+
+        print("⚠️ StoreFront mapping not found for: \(storeFront) (parsed as: \(storeFrontValue))")
+        return "tr"
     }
 }
 

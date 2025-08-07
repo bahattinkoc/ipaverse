@@ -26,33 +26,39 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Main View (Placeholder)
+// MARK: - Main View
 struct MainView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginViewModel
+    @State private var selectedTab = 0
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Text("Welcome, \(account.name)!")
-                    .font(.title)
-                    .fontWeight(.bold)
+            TabView(selection: $selectedTab) {
+                DownloadedView(account: account)
+                    .tabItem {
+                        Image(systemName: "arrow.down.circle")
+                        Text("Downloaded")
+                    }
+                    .tag(0)
 
-                Text("Apple ID: \(account.email)")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-
-                Spacer()
-
-                Button("Log Out") {
-                    Task {
-                        await loginViewModel.logout()
+                SearchView(account: account)
+                    .tabItem {
+                        Image(systemName: "magnifyingglass")
+                        Text("Search")
+                    }
+                    .tag(1)
+            }
+            .navigationTitle("ipaverse")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Log Out") {
+                        Task {
+                            await loginViewModel.logout()
+                        }
                     }
                 }
-                .buttonStyle(.borderedProminent)
             }
-            .padding()
-            .navigationTitle("ipaverse")
         }
     }
 }

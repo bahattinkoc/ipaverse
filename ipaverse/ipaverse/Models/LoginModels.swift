@@ -30,13 +30,20 @@ struct Account: Codable, Equatable {
     let directoryServicesID: String
     let password: String
     
-    init(email: String, name: String, storeFront: String, passwordToken: String, directoryServicesID: String, password: String = "") {
+    init(
+        email: String,
+        password: String = "",
+        name: String,
+        storeFront: String,
+        passwordToken: String,
+        directoryServicesID: String
+    ) {
         self.email = email
+        self.password = password
         self.name = name
         self.storeFront = storeFront
         self.passwordToken = passwordToken
         self.directoryServicesID = directoryServicesID
-        self.password = password
     }
 }
 
