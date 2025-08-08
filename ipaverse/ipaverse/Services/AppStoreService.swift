@@ -44,12 +44,14 @@ protocol AppStoreServiceProtocol {
     func logout() async throws
     func search(term: String, account: Account, limit: Int) async throws -> SearchResult
     func purchase(app: AppStoreApp, account: Account) async throws
-    func download(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)?) async throws -> DownloadOutput
 }
 
 final class AppStoreService: AppStoreServiceProtocol {
     private let session: URLSession
     private let cookieJar: HTTPCookieStorage
+
+    let sessionDelegate: AppStoreURLSessionDelegate
 
     init(session: URLSession = .shared) {
         let config = URLSessionConfiguration.default
@@ -57,7 +59,9 @@ final class AppStoreService: AppStoreServiceProtocol {
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpShouldSetCookies = true
 
-        self.session = URLSession(configuration: config, delegate: AppStoreURLSessionDelegate(), delegateQueue: nil)
+        let delegate = AppStoreURLSessionDelegate()
+        self.sessionDelegate = delegate
+        self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         self.cookieJar = HTTPCookieStorage.shared
     }
 
@@ -288,41 +292,42 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Download
-    func download(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput {
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
         print("📥 Starting download for: \(app.name ?? "")")
 
-        var lastError: Error?
-        var purchased = false // TODO: - bunu kullan
+        var purchased = false
 
-        for _ in 1...2 {
-            do {
-                let result = try await performDownload(app: app, account: account, outputPath: outputPath)
-                print("✅ Download completed: \(result.destinationPath)")
-                return result
-
-            } catch {
-                lastError = error
-
-                if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
-                    print("🛒 License required, attempting purchase...")
+        do {
+            _ = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
+            purchased = true
+        } catch {
+            if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
+                print("🛒 License required, attempting purchase...")
+                do {
                     try await purchase(app: app, account: account)
                     purchased = true
-                    continue
+                } catch {
+                    if !error.localizedDescription.contains("already exists") {
+                        throw error
+                    }
+                    purchased = true
+                    print("ℹ️ License already exists for: \(app.name ?? "")")
                 }
-
-                if error.localizedDescription.contains("token expired") {
-                    print("🔄 Token expired, need to re-login")
-                    throw error
-                }
-
+            } else {
                 throw error
             }
         }
 
-        throw lastError ?? LoginError.networkError
+        if !purchased {
+            throw LoginError.unknownError("Failed to verify app license")
+        }
+
+        let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
+        print("✅ Download completed: \(result.destinationPath)")
+        return result
     }
 
-    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?) async throws -> DownloadOutput {
+    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -375,13 +380,35 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         guard let items = plist?["songList"] as? [[String: Any]],
               let firstItem = items.first,
-              let downloadURL = firstItem["URL"] as? String else {
+              let downloadURLString = firstItem["URL"] as? String,
+              let downloadURL = URL(string: downloadURLString) else {
             throw LoginError.unknownError("Invalid download response")
         }
 
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
+        let destinationURL = URL(fileURLWithPath: destinationPath)
 
-        print("📥 Download URL obtained: \(downloadURL)")
+        print("📥 Download URL obtained: \(downloadURLString)")
+
+        sessionDelegate.progressHandler = progress
+
+        var downloadRequest = URLRequest(url: downloadURL)
+        downloadRequest.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+
+        let downloadTask = session.downloadTask(with: downloadRequest)
+
+        downloadTask.resume()
+
+        let (fileURL, _) = try await session.download(from: downloadURL)
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.moveItem(at: fileURL, to: destinationURL)
+
+        print("✅ File saved to: \(destinationURL.path)")
 
         return DownloadOutput(
             destinationPath: destinationPath,
@@ -683,7 +710,9 @@ struct LoginParseResult {
 }
 
 // MARK: - URLSession Delegate for Redirect Handling
-final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate {
+final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate {
+    var progressHandler: ((Double) -> Void)?
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -699,5 +728,14 @@ final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate {
             print("🔄 Redirect allowed: \(request.url?.absoluteString ?? "")")
             completionHandler(request)
         }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        progressHandler?(progress)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        progressHandler?(1.0)
     }
 }

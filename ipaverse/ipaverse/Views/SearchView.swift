@@ -80,7 +80,7 @@ struct SearchView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         List(searchResults) { app in
-                            SearchResultRow(app: app) {
+                            SearchResultRow(app: app, isDownloading: isDownloading && currentDownloadApp?.id == app.id, downloadProgress: downloadProgress) {
                                 downloadApp(app)
                             }
                         }
@@ -91,6 +91,11 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("Search")
+            .onChange(of: showingSavePanel) { _, newValue in
+                if newValue {
+                    showSavePanel()
+                }
+            }
         }
     }
 
@@ -167,41 +172,41 @@ struct SearchView: View {
         }
     }
 
+    @State private var showingSavePanel = false
+    @State private var currentDownloadApp: AppStoreApp?
+    @State private var downloadProgress: Double = 0
+    @State private var isDownloading = false
+
     private func downloadApp(_ app: AppStoreApp) {
+        currentDownloadApp = app
+        showingSavePanel = true
+    }
+
+    private func startDownload(at url: URL) {
+        guard let app = currentDownloadApp else { return }
+
+        isDownloading = true
+        downloadProgress = 0
+
         Task {
             do {
-                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                let downloadedPath = documentsPath.appendingPathComponent("Downloaded")
-
-                if !FileManager.default.fileExists(atPath: downloadedPath.path) {
-                    try FileManager.default.createDirectory(at: downloadedPath, withIntermediateDirectories: true)
-                }
-
-                let fileName = "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
-                let outputPath = downloadedPath.appendingPathComponent(fileName).path
-
                 let appStoreService = AppStoreService()
-
-                // First try to purchase if needed, then download
-                do {
-                    try await appStoreService.purchase(app: app, account: account)
-                    print("🛒 Purchase successful for: \(app.name ?? "")")
-                } catch {
-                    if !error.localizedDescription.contains("already exists") {
-                        throw error
-                    }
-                    print("ℹ️ License already exists for: \(app.name ?? "")")
-                }
-
                 let output = try await appStoreService.download(
                     app: app,
                     account: account,
-                    outputPath: outputPath
+                    outputPath: url.path,
+                    progress: { progress in
+                        Task { @MainActor in
+                            downloadProgress = progress
+                        }
+                    }
                 )
 
                 if output.success {
                     await MainActor.run {
                         print("✅ App downloaded successfully: \(app.name ?? "")")
+                        isDownloading = false
+                        downloadProgress = 1.0
                     }
                 }
 
@@ -211,17 +216,37 @@ struct SearchView: View {
                 } else {
                     await MainActor.run {
                         errorMessage = "Download failed: \(error.localizedDescription)"
+                        isDownloading = false
+                        downloadProgress = 0
                     }
                 }
             }
+        }
+    }
+
+    private func showSavePanel() {
+        guard let app = currentDownloadApp else { return }
+
+        let savePanel = NSSavePanel()
+        savePanel.title = "Save IPA File"
+        savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(app.version ?? "").ipa"
+        savePanel.allowedContentTypes = [.init(filenameExtension: "ipa")!]
+        savePanel.canCreateDirectories = true
+
+        savePanel.begin { response in
+            if response == .OK, let url = savePanel.url {
+                startDownload(at: url)
+            }
+            showingSavePanel = false
         }
     }
 }
 
 struct SearchResultRow: View {
     let app: AppStoreApp
+    let isDownloading: Bool
+    let downloadProgress: Double
     let onDownload: () -> Void
-    @State private var isDownloading = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -267,23 +292,24 @@ struct SearchResultRow: View {
 
             Spacer()
 
-            Button(action: {
-                isDownloading = true
-                onDownload()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    isDownloading = false
-                }
-            }) {
-                if isDownloading {
+            if isDownloading {
+                VStack(spacing: 4) {
                     ProgressView()
                         .scaleEffect(0.8)
-                } else {
+
+                    Text("\(Int(downloadProgress * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(width: 50)
+            } else {
+                Button(action: onDownload) {
                     Image(systemName: "arrow.down.circle")
                         .foregroundColor(.blue)
                 }
+                .buttonStyle(.plain)
+                .disabled(isDownloading)
             }
-            .buttonStyle(.plain)
-            .disabled(isDownloading)
         }
         .padding(.vertical, 4)
     }
