@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct ipaverseApp: App {
@@ -13,5 +14,6 @@ struct ipaverseApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(for: DownloadedApp.self)
     }
 }

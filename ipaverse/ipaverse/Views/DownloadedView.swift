@@ -6,10 +6,12 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct DownloadedView: View {
     let account: Account
-    @State private var downloadedApps: [DownloadedApp] = []
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -77,59 +79,10 @@ struct DownloadedView: View {
     private func loadDownloadedApps() {
         isLoading = true
         errorMessage = nil
-
+        
         Task {
-            do {
-                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                let downloadedPath = documentsPath.appendingPathComponent("Downloaded")
-
-                if !FileManager.default.fileExists(atPath: downloadedPath.path) {
-                    try FileManager.default.createDirectory(at: downloadedPath, withIntermediateDirectories: true)
-                }
-
-                let files = try FileManager.default.contentsOfDirectory(at: downloadedPath, includingPropertiesForKeys: [.creationDateKey])
-
-                var apps: [DownloadedApp] = []
-
-                for file in files where file.pathExtension == "ipa" {
-                    let fileName = file.deletingPathExtension().lastPathComponent
-                    let components = fileName.components(separatedBy: "_")
-
-                    if components.count >= 3 {
-                        let bundleID = components[0]
-                        let appID = Int64(components[1]) ?? 0
-                        let version = components[2]
-
-                        let app = AppStoreApp(
-                            id: appID,
-                            bundleID: bundleID,
-                            name: bundleID,
-                            version: version,
-                            price: 0.0
-                        )
-
-                        let creationDate = try file.resourceValues(forKeys: [.creationDateKey]).creationDate ?? Date()
-
-                        let downloadedApp = DownloadedApp(
-                            app: app,
-                            downloadDate: creationDate,
-                            filePath: file.path
-                        )
-
-                        apps.append(downloadedApp)
-                    }
-                }
-
-                await MainActor.run {
-                    downloadedApps = apps.sorted { $0.downloadDate > $1.downloadDate }
-                    isLoading = false
-                }
-
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to load downloaded apps: \(error.localizedDescription)"
-                    isLoading = false
-                }
+            await MainActor.run {
+                isLoading = false
             }
         }
     }
@@ -138,10 +91,20 @@ struct DownloadedView: View {
         Task {
             do {
                 let appStoreService = AppStoreService()
+                let app = AppStoreApp(
+                    id: downloadedApp.appId,
+                    bundleID: downloadedApp.bundleID,
+                    name: downloadedApp.name,
+                    version: downloadedApp.version,
+                    price: downloadedApp.price,
+                    iconURL: downloadedApp.iconURL
+                )
+                
                 let output = try await appStoreService.download(
-                    app: downloadedApp.app,
+                    app: app,
                     account: account,
-                    outputPath: downloadedApp.filePath
+                    outputPath: downloadedApp.filePath,
+                    modelContext: modelContext
                 )
 
                 if output.success {
@@ -164,7 +127,7 @@ struct DownloadedAppRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: URL(string: downloadedApp.app.iconURL ?? "")) { image in
+            AsyncImage(url: URL(string: downloadedApp.iconURL ?? "")) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -180,16 +143,16 @@ struct DownloadedAppRow: View {
             .cornerRadius(8)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(downloadedApp.app.name ?? "-")
+                Text(downloadedApp.name.isEmpty ? "-" : downloadedApp.name)
                     .font(.headline)
                     .lineLimit(1)
 
-                Text(downloadedApp.app.bundleID ?? "-")
+                Text(downloadedApp.bundleID.isEmpty ? "-" : downloadedApp.bundleID)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
 
-                Text("v\(downloadedApp.app.version ?? "-")")
+                Text("v\(downloadedApp.version.isEmpty ? "-" : downloadedApp.version)")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -218,4 +181,5 @@ struct DownloadedAppRow: View {
         passwordToken: "token",
         directoryServicesID: "123456"
     ))
+    .modelContainer(for: DownloadedApp.self, inMemory: true)
 }

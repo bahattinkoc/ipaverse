@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import Network
+import SwiftData
 
 // MARK: - App Store Constants
 struct AppStoreConstants {
@@ -44,7 +45,7 @@ protocol AppStoreServiceProtocol {
     func logout() async throws
     func search(term: String, account: Account, limit: Int) async throws -> SearchResult
     func purchase(app: AppStoreApp, account: Account) async throws
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)?) async throws -> DownloadOutput
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
 }
 
 final class AppStoreService: AppStoreServiceProtocol {
@@ -292,7 +293,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Download
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
         print("📥 Starting download for: \(app.name ?? "")")
 
         var purchased = false
@@ -323,6 +324,11 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
+        
+        if result.success, let modelContext {
+            await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
+        }
+        
         print("✅ Download completed: \(result.destinationPath)")
         return result
     }
@@ -680,6 +686,19 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         print("⚠️ StoreFront mapping not found for: \(storeFront) (parsed as: \(storeFrontValue))")
         return "tr"
+    }
+
+    private func saveDownloadedApp(app: AppStoreApp, filePath: String, context: ModelContext) async {
+        await MainActor.run {
+            do {
+                let downloadedApp = DownloadedApp(app: app, filePath: filePath)
+                context.insert(downloadedApp)
+                try context.save()
+                print("💾 Downloaded app saved to SwiftData: \(app.name ?? "")")
+            } catch {
+                print("❌ Failed to save downloaded app to SwiftData: \(error)")
+            }
+        }
     }
 }
 

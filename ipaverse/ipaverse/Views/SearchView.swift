@@ -6,10 +6,12 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct SearchView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginViewModel
+    @Environment(\.modelContext) private var modelContext
     @State private var searchText = ""
     @State private var searchResults: [AppStoreApp] = []
     @State private var isLoading = false
@@ -199,7 +201,8 @@ struct SearchView: View {
                         Task { @MainActor in
                             downloadProgress = progress
                         }
-                    }
+                    },
+                    modelContext: modelContext
                 )
 
                 if output.success {

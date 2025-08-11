@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct ContentView: View {
     @StateObject private var loginViewModel = LoginViewModel()
@@ -65,4 +66,5 @@ struct MainView: View {
 
 #Preview {
     ContentView()
+        .modelContainer(for: DownloadedApp.self, inMemory: true)
 }
