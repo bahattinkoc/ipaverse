@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct LoginView: View {
-    @EnvironmentObject var viewModel: LoginViewModel
+    @EnvironmentObject var viewModel: LoginVM
 
     var body: some View {
         NavigationStack {
@@ -206,9 +206,4 @@ struct CheckboxToggleStyle: ToggleStyle {
             configuration.isOn.toggle()
         }
     }
-}
-
-#Preview {
-    LoginView()
-        .environmentObject(LoginViewModel())
 }

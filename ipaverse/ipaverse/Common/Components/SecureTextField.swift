@@ -56,13 +56,3 @@ struct SecureTextField: View {
         }
     }
 }
-
-#Preview {
-    SecureTextField(
-        title: "Password",
-        placeholder: "Enter your password",
-        text: .constant(""),
-        errorMessage: nil
-    )
-    .padding()
-}

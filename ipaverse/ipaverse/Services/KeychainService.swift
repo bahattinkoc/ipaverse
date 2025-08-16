@@ -110,19 +110,22 @@ final class KeychainService: KeychainServiceProtocol {
 }
 
 // MARK: - Keychain Error
-enum KeychainError: LocalizedError {
-    case saveFailed(OSStatus)
-    case deleteFailed(OSStatus)
-    case readFailed(OSStatus)
 
-    var errorDescription: String? {
-        switch self {
-        case .saveFailed(let status):
-            return "Error saving to keychain: \(status)"
-        case .deleteFailed(let status):
-            return "Error deleting from Keychain: \(status)"
-        case .readFailed(let status):
-            return "Reading error from keychain: \(status)"
+private extension KeychainService {
+    enum KeychainError: LocalizedError {
+        case saveFailed(OSStatus)
+        case deleteFailed(OSStatus)
+        case readFailed(OSStatus)
+
+        var errorDescription: String? {
+            switch self {
+            case .saveFailed(let status):
+                return "Error saving to keychain: \(status)"
+            case .deleteFailed(let status):
+                return "Error deleting from Keychain: \(status)"
+            case .readFailed(let status):
+                return "Reading error from keychain: \(status)"
+            }
         }
     }
 }

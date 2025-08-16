@@ -1,5 +1,5 @@
 //
-//  LoginModels.swift
+//  LoginModel.swift
 //  ipaverse
 //
 //  Created by BAHATTIN KOC on 6.08.2025.

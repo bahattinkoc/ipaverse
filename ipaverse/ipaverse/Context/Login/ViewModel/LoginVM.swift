@@ -1,5 +1,5 @@
 //
-//  LoginViewModel.swift
+//  LoginVM.swift
 //  ipaverse
 //
 //  Created by BAHATTIN KOC on 6.08.2025.
@@ -9,7 +9,7 @@ import Foundation
 import Combine
 
 @MainActor
-final class LoginViewModel: ObservableObject {
+final class LoginVM: ObservableObject {
 
     // MARK: - PUBLISHED PROPERTIES
 
@@ -230,7 +230,7 @@ final class LoginViewModel: ObservableObject {
 }
 
 // MARK: - Computed Properties
-extension LoginViewModel {
+extension LoginVM {
     var isLoading: Bool {
         if case .loading = loginState {
             return true

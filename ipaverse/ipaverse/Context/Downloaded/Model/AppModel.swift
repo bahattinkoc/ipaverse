@@ -1,5 +1,5 @@
 //
-//  AppModels.swift
+//  AppModel.swift
 //  ipaverse
 //
 //  Created by BAHATTIN KOC on 6.08.2025.

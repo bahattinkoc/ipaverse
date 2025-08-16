@@ -62,20 +62,3 @@ struct LoadingButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
-
-#Preview {
-    VStack(spacing: 20) {
-        LoadingButton(title: "Log in", isLoading: false) {
-            // Action
-        }
-
-        LoadingButton(title: "Logging in...", isLoading: true) {
-            // Action
-        }
-
-        LoadingButton(title: "Out of Service", isLoading: false, isEnabled: false) {
-            // Action
-        }
-    }
-    .padding()
-}

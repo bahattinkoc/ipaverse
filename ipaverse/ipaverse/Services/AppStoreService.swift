@@ -10,35 +10,6 @@ import Combine
 import Network
 import SwiftData
 
-// MARK: - App Store Constants
-struct AppStoreConstants {
-    static let failureTypeInvalidCredentials = "-5000"
-    static let failureTypePasswordTokenExpired = "2034"
-    static let failureTypeLicenseNotFound = "9610"
-    static let failureTypeTemporarilyUnavailable = "2059"
-
-    static let customerMessageBadLogin = "MZFinance.BadLogin.Configurator_message"
-    static let customerMessageAccountDisabled = "Your account is disabled."
-    static let customerMessageSubscriptionRequired = "Subscription Required"
-
-    static let iTunesAPIDomain = "itunes.apple.com"
-    static let iTunesAPIPathSearch = "/search"
-    static let iTunesAPIPathLookup = "/lookup"
-
-    static let privateAppStoreAPIDomainPrefixWithoutAuthCode = "p25"
-    static let privateAppStoreAPIDomainPrefixWithAuthCode = "p71"
-    static let privateAppStoreAPIDomain = "buy." + iTunesAPIDomain
-    static let privateAppStoreAPIPathAuthenticate = "/WebObjects/MZFinance.woa/wa/authenticate"
-    static let privateAppStoreAPIPathPurchase = "/WebObjects/MZFinance.woa/wa/buyProduct"
-    static let privateAppStoreAPIPathDownload = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
-
-    static let httpHeaderStoreFront = "X-Set-Apple-Store-Front"
-
-    static let pricingParameterAppStore = "STDQ"
-    static let pricingParameterAppleArcade = "GAME"
-    static let defaultUserAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
-}
-
 protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
     func validateToken(_ token: String) async throws -> Bool
@@ -166,7 +137,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Search
     func search(term: String, account: Account, limit: Int = 5) async throws -> SearchResult {
         let countryCode = getCountryCodeFromStoreFront(account.storeFront)
-        let urlString = "https://\(AppStoreConstants.iTunesAPIDomain)\(AppStoreConstants.iTunesAPIPathSearch)?entity=software,iPadSoftware&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
+        let urlString = "https://\(Constant.iTunesAPIDomain)\(Constant.iTunesAPIPathSearch)?entity=software,iPadSoftware&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
 
         guard let url = URL(string: urlString) else {
             throw LoginError.networkError
@@ -175,7 +146,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await session.data(for: request)
 
@@ -198,10 +169,10 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         do {
-            try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: AppStoreConstants.pricingParameterAppStore)
+            try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: Constant.pricingParameterAppStore)
         } catch {
             if error.localizedDescription.contains("temporarily unavailable") {
-                try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: AppStoreConstants.pricingParameterAppleArcade)
+                try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: Constant.pricingParameterAppleArcade)
             } else {
                 throw error
             }
@@ -209,12 +180,12 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     private func purchaseWithParams(account: Account, app: AppStoreApp, guid: String, pricingParameters: String) async throws {
-        let url = URL(string: "https://\(AppStoreConstants.privateAppStoreAPIDomain)\(AppStoreConstants.privateAppStoreAPIPathPurchase)")!
+        let url = URL(string: "https://\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathPurchase)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
         request.setValue(account.storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
@@ -255,10 +226,10 @@ final class AppStoreService: AppStoreServiceProtocol {
         let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
-            if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
+            if failureType == Constant.failureTypePasswordTokenExpired {
                 throw LoginError.tokenExpired
             }
-            if failureType == AppStoreConstants.failureTypeTemporarilyUnavailable {
+            if failureType == Constant.failureTypeTemporarilyUnavailable {
                 throw LoginError.unknownError("Item is temporarily unavailable")
             }
             if !failureType.isEmpty {
@@ -315,7 +286,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
-        let downloadURL = "https://\(AppStoreConstants.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(AppStoreConstants.privateAppStoreAPIDomain)\(AppStoreConstants.privateAppStoreAPIPathDownload)?guid=\(guid)"
+        let downloadURL = "https://\(Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
 
         guard let url = URL(string: downloadURL) else {
             throw LoginError.networkError
@@ -324,7 +295,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
@@ -350,10 +321,10 @@ final class AppStoreService: AppStoreServiceProtocol {
         let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
-            if failureType == AppStoreConstants.failureTypePasswordTokenExpired {
+            if failureType == Constant.failureTypePasswordTokenExpired {
                 throw LoginError.tokenExpired
             }
-            if failureType == AppStoreConstants.failureTypeLicenseNotFound {
+            if failureType == Constant.failureTypeLicenseNotFound {
                 throw LoginError.unknownError("License required")
             }
             if !failureType.isEmpty {
@@ -375,7 +346,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         sessionDelegate.progressHandler = progress
 
         var downloadRequest = URLRequest(url: downloadURL)
-        downloadRequest.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
@@ -424,7 +395,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
 
-        request.setValue(AppStoreConstants.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
 
         let payload: Data
         switch attempt {
@@ -521,19 +492,19 @@ final class AppStoreService: AppStoreServiceProtocol {
         let failureType = plist["failureType"] as? String ?? ""
         let customerMessage = plist["customerMessage"] as? String ?? ""
 
-        if failureType == AppStoreConstants.failureTypeInvalidCredentials {
+        if failureType == Constant.failureTypeInvalidCredentials {
             throw LoginError.invalidCredentials
         }
 
-        if customerMessage == AppStoreConstants.customerMessageAccountDisabled {
+        if customerMessage == Constant.customerMessageAccountDisabled {
             throw LoginError.accountLocked
         }
 
-        if failureType.isEmpty && authCode == nil && customerMessage == AppStoreConstants.customerMessageBadLogin {
+        if failureType.isEmpty && authCode == nil && customerMessage == Constant.customerMessageBadLogin {
             throw LoginError.twoFactorRequired
         }
 
-        if failureType.isEmpty && authCode != nil && customerMessage == AppStoreConstants.customerMessageBadLogin {
+        if failureType.isEmpty && authCode != nil && customerMessage == Constant.customerMessageBadLogin {
             throw LoginError.twoFactorRequired
         }
 
@@ -556,7 +527,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         let accountName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
-        let storeFront = httpResponse.value(forHTTPHeaderField: AppStoreConstants.httpHeaderStoreFront) ?? "143441"
+        let storeFront = httpResponse.value(forHTTPHeaderField: Constant.httpHeaderStoreFront) ?? "143441"
 
         return LoginParseResult(
             shouldRetry: false,
@@ -636,7 +607,6 @@ final class AppStoreService: AppStoreServiceProtocol {
             }
         }
 
-        print("⚠️ StoreFront mapping not found for: \(storeFront) (parsed as: \(storeFrontValue))")
         return "tr"
     }
 
@@ -646,7 +616,6 @@ final class AppStoreService: AppStoreServiceProtocol {
             let downloadedApp = DownloadedApp(app: app, filePath: filePath)
             context.insert(downloadedApp)
             try context.save()
-            print("💾 Downloaded app saved to SwiftData: \(app.name ?? "")")
         } catch {
             print("❌ Failed to save downloaded app to SwiftData: \(error)")
         }
@@ -705,5 +674,37 @@ final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSes
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         progressHandler?(1.0)
+    }
+}
+
+// MARK: - CONSTANT
+
+private extension AppStoreService {
+    enum Constant {
+        static let failureTypeInvalidCredentials = "-5000"
+        static let failureTypePasswordTokenExpired = "2034"
+        static let failureTypeLicenseNotFound = "9610"
+        static let failureTypeTemporarilyUnavailable = "2059"
+
+        static let customerMessageBadLogin = "MZFinance.BadLogin.Configurator_message"
+        static let customerMessageAccountDisabled = "Your account is disabled."
+        static let customerMessageSubscriptionRequired = "Subscription Required"
+
+        static let iTunesAPIDomain = "itunes.apple.com"
+        static let iTunesAPIPathSearch = "/search"
+        static let iTunesAPIPathLookup = "/lookup"
+
+        static let privateAppStoreAPIDomainPrefixWithoutAuthCode = "p25"
+        static let privateAppStoreAPIDomainPrefixWithAuthCode = "p71"
+        static let privateAppStoreAPIDomain = "buy." + iTunesAPIDomain
+        static let privateAppStoreAPIPathAuthenticate = "/WebObjects/MZFinance.woa/wa/authenticate"
+        static let privateAppStoreAPIPathPurchase = "/WebObjects/MZFinance.woa/wa/buyProduct"
+        static let privateAppStoreAPIPathDownload = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
+
+        static let httpHeaderStoreFront = "X-Set-Apple-Store-Front"
+
+        static let pricingParameterAppStore = "STDQ"
+        static let pricingParameterAppleArcade = "GAME"
+        static let defaultUserAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
     }
 }

@@ -172,14 +172,3 @@ struct DownloadedAppRow: View {
         .padding(.vertical, 4)
     }
 }
-
-#Preview {
-    DownloadedView(account: Account(
-        email: "test@example.com",
-        name: "Test User",
-        storeFront: "143441",
-        passwordToken: "token",
-        directoryServicesID: "123456"
-    ))
-    .modelContainer(for: DownloadedApp.self, inMemory: true)
-}
