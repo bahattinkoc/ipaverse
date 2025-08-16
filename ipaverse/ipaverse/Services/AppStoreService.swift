@@ -69,8 +69,6 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Login
     func login(credentials: LoginCredentials) async throws -> Account {
         let deviceID = try await getDeviceIdentifier()
-        print("Device ID: \(deviceID)")
-
         var redirect = ""
         var attempt = 1
         let maxAttempts = 4
@@ -88,8 +86,6 @@ final class AppStoreService: AppStoreServiceProtocol {
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw LoginError.networkError
             }
-
-            print("Attempt \(attempt) - Status Code: \(httpResponse.statusCode)")
 
             let parseResult = try parseLoginResponse(
                 data: data,
@@ -114,7 +110,6 @@ final class AppStoreService: AppStoreServiceProtocol {
                 directoryServicesID: parseResult.directoryServicesID ?? ""
             )
 
-            print("Login successful: \(account.name)")
             return account
         }
 
@@ -141,8 +136,6 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Logout
     func logout() async throws {
-        print("🔓 Logout is starting...")
-
         do {
             let keychain = KeychainService()
             try keychain.clearCredentials()
@@ -165,18 +158,13 @@ final class AppStoreService: AppStoreServiceProtocol {
                 }
             }
 
-            print("✅ Logout successful - all data cleared")
-
         } catch {
-            print("❌ Logout error: \(error)")
             throw LoginError.unknownError("Logout failed: \(error.localizedDescription)")
         }
     }
 
     // MARK: - Search
     func search(term: String, account: Account, limit: Int = 5) async throws -> SearchResult {
-        print("🔍 Searching for: \(term) (limit: \(limit))")
-
         let countryCode = getCountryCodeFromStoreFront(account.storeFront)
         let urlString = "https://\(AppStoreConstants.iTunesAPIDomain)\(AppStoreConstants.iTunesAPIPathSearch)?entity=software,iPadSoftware&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
 
@@ -197,14 +185,11 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         let searchResult = try JSONDecoder().decode(SearchResult.self, from: data)
-        print("✅ Search completed: \(searchResult.count ?? 0) results found")
         return searchResult
     }
 
     // MARK: - Purchase
     func purchase(app: AppStoreApp, account: Account) async throws {
-        print("🛒 Purchasing app: \(app.name ?? "")")
-
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -221,8 +206,6 @@ final class AppStoreService: AppStoreServiceProtocol {
                 throw error
             }
         }
-
-        print("✅ Purchase completed successfully")
     }
 
     private func purchaseWithParams(account: Account, app: AppStoreApp, guid: String, pricingParameters: String) async throws {
@@ -294,8 +277,6 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Download
     func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
-        print("📥 Starting download for: \(app.name ?? "")")
-
         var purchased = false
 
         do {
@@ -303,7 +284,6 @@ final class AppStoreService: AppStoreServiceProtocol {
             purchased = true
         } catch {
             if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
-                print("🛒 License required, attempting purchase...")
                 do {
                     try await purchase(app: app, account: account)
                     purchased = true
@@ -312,7 +292,6 @@ final class AppStoreService: AppStoreServiceProtocol {
                         throw error
                     }
                     purchased = true
-                    print("ℹ️ License already exists for: \(app.name ?? "")")
                 }
             } else {
                 throw error
@@ -324,12 +303,11 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
-        
+
         if result.success, let modelContext {
             await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
         }
-        
-        print("✅ Download completed: \(result.destinationPath)")
+
         return result
     }
 
@@ -394,8 +372,6 @@ final class AppStoreService: AppStoreServiceProtocol {
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
 
-        print("📥 Download URL obtained: \(downloadURLString)")
-
         sessionDelegate.progressHandler = progress
 
         var downloadRequest = URLRequest(url: downloadURL)
@@ -414,8 +390,6 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
         try FileManager.default.moveItem(at: fileURL, to: destinationURL)
 
-        print("✅ File saved to: \(destinationURL.path)")
-
         return DownloadOutput(
             destinationPath: destinationPath,
             success: true,
@@ -426,9 +400,6 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Private Methods
 
     private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, redirectURL: String) throws -> URLRequest {
-        print("Creating login request for: \(credentials.email) (Attempt: \(attempt))")
-        print("Device ID: \(deviceID)")
-
         var baseURL: String
 
         switch attempt {
@@ -446,12 +417,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         let urlString = redirectURL.isEmpty ? baseURL : redirectURL
 
-        print("🌐 Request URL: \(urlString)")
-        print("🏗️ Domain: \(AppStoreConstants.privateAppStoreAPIDomain)")
-        print("🛤️ Path: \(AppStoreConstants.privateAppStoreAPIPathAuthenticate)")
-
         guard let url = URL(string: urlString) else {
-            print("❌ Invalid URL: \(urlString)")
             throw LoginError.networkError
         }
 
@@ -465,26 +431,18 @@ final class AppStoreService: AppStoreServiceProtocol {
         case 1, 2:
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             payload = try createPlistPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-            print("📦 Using XML Plist payload")
         case 3:
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             payload = createURLEncodedPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-            print("📦 Using URL Encoded payload")
         case 4:
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             payload = try createJSONPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-            print("📦 Using JSON payload")
         default:
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             payload = try createPlistPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-            print("📦 Using XML Plist payload (default)")
         }
 
         request.httpBody = payload
-
-        print("📦 Payload size: \(payload.count) bytes")
-        print("📄 Payload preview: \(String(data: payload.prefix(200), encoding: .utf8) ?? "Unable to decode")")
-
         return request
     }
 
@@ -541,15 +499,9 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     private func parseLoginResponse(data: Data, statusCode: Int, attempt: Int, authCode: String?, httpResponse: HTTPURLResponse) throws -> LoginParseResult {
-        print("Response Status Code: \(statusCode)")
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("Response Data: \(responseString.prefix(500))...")
-        }
-
         var redirectURL: String? = nil
 
         if statusCode == 404 {
-            print("⚠️ 404 error received - URL or format may be incorrect")
             return LoginParseResult(shouldRetry: true)
         }
 
@@ -688,16 +640,15 @@ final class AppStoreService: AppStoreServiceProtocol {
         return "tr"
     }
 
+    @MainActor
     private func saveDownloadedApp(app: AppStoreApp, filePath: String, context: ModelContext) async {
-        await MainActor.run {
-            do {
-                let downloadedApp = DownloadedApp(app: app, filePath: filePath)
-                context.insert(downloadedApp)
-                try context.save()
-                print("💾 Downloaded app saved to SwiftData: \(app.name ?? "")")
-            } catch {
-                print("❌ Failed to save downloaded app to SwiftData: \(error)")
-            }
+        do {
+            let downloadedApp = DownloadedApp(app: app, filePath: filePath)
+            context.insert(downloadedApp)
+            try context.save()
+            print("💾 Downloaded app saved to SwiftData: \(app.name ?? "")")
+        } catch {
+            print("❌ Failed to save downloaded app to SwiftData: \(error)")
         }
     }
 }
@@ -741,10 +692,8 @@ final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSes
     ) {
         if let referer = response.url?.absoluteString,
            referer.contains("buy.itunes.apple.com") && referer.contains("authenticate") {
-            print("🔄 Redirect stopped: \(referer) -> \(request.url?.absoluteString ?? "")")
             completionHandler(nil)
         } else {
-            print("🔄 Redirect allowed: \(request.url?.absoluteString ?? "")")
             completionHandler(request)
         }
     }

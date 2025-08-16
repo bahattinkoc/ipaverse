@@ -116,6 +116,9 @@ struct LoginView: View {
                 Spacer()
             }
         }
+        .task {
+            viewModel.loadUserEmail()
+        }
     }
 
     // MARK: - Two Factor Section

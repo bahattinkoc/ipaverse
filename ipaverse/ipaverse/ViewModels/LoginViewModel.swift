@@ -10,7 +10,9 @@ import Combine
 
 @MainActor
 final class LoginViewModel: ObservableObject {
-    // MARK: - Published Properties
+
+    // MARK: - PUBLISHED PROPERTIES
+
     @Published var loginState: LoginState = .idle
     @Published var email: String = ""
     @Published var password: String = ""
@@ -20,14 +22,18 @@ final class LoginViewModel: ObservableObject {
     @Published var errorMessage: String = ""
     @Published var toastMessage: String = ""
 
-    // MARK: - Services
+    // MARK: - SERVICES
+
     private let keychainService: KeychainServiceProtocol
     private let appStoreService: AppStoreServiceProtocol
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - Initialization
-    init(keychainService: KeychainServiceProtocol = KeychainService(),
-         appStoreService: AppStoreServiceProtocol = AppStoreService()) {
+    // MARK: - INIT
+
+    init(
+        keychainService: KeychainServiceProtocol = KeychainService(),
+        appStoreService: AppStoreServiceProtocol = AppStoreService()
+    ) {
         self.keychainService = keychainService
         self.appStoreService = appStoreService
 
@@ -35,17 +41,17 @@ final class LoginViewModel: ObservableObject {
         checkExistingLogin()
     }
 
-    // MARK: - Public Methods
+    // MARK: - INTERNAL FUNCTIONS
+
+    func loadUserEmail() {
+        email = UserDefaults.standard.string(forKey: "lastEmail") ?? ""
+    }
+
     func login() async {
         guard validateInputs() else { return }
 
         loginState = .loading
         errorMessage = ""
-
-        print("🔐 Login starting...")
-        print("📧 Email: \(email)")
-        print("🔑 Password length: \(password.count)")
-        print("📱 2FA Code: \(authCode.isEmpty ? "Doesn't have" : "Have (\(authCode.count) characters)")")
 
         do {
             let credentials = LoginCredentials(
@@ -57,47 +63,35 @@ final class LoginViewModel: ObservableObject {
 
             let account = try await appStoreService.login(credentials: credentials)
 
-            print("✅ Login succeeded!")
-            print("👤 User: \(account.name)")
-            print("🏪 Store Front: \(account.storeFront)")
-            print("🎫 Token length: \(account.passwordToken.count)")
-
             if rememberMe {
                 try keychainService.saveCredentials(credentials)
-                print("💾 Credentials saved to keychain")
             }
 
             try keychainService.saveAccount(account)
-            print("💾 Account saved to keychain")
 
             loginState = .success(account)
-
+            saveUserEmail()
         } catch LoginError.twoFactorRequired {
-            print("🔐 2FA required")
             showAuthCodeField = true
             loginState = .requires2FA
             errorMessage = "Two-factor authentication code required"
 
         } catch LoginError.invalidCredentials {
-            print("❌ Invalid credentials")
             loginState = .error("Invalid Apple ID or password")
             errorMessage = "Invalid Apple ID or password"
 
         } catch {
-            print("❌ Login error: \(error)")
             loginState = .error(error.localizedDescription)
             errorMessage = error.localizedDescription
         }
     }
 
     func handle2FA(_ code: String) async {
-        print("2FA code received: \(code)")
         authCode = code
         await login()
     }
 
     func resetToLoginForm() {
-        print("🔄 Resetting to login form")
         showAuthCodeField = false
         authCode = ""
         errorMessage = ""
@@ -105,7 +99,6 @@ final class LoginViewModel: ObservableObject {
     }
     
     func resendAuthCode() async {
-        print("🔄 Resending auth code...")
         errorMessage = ""
         authCode = ""
 
@@ -119,40 +112,30 @@ final class LoginViewModel: ObservableObject {
         do {
             let account = try await appStoreService.login(credentials: credentials)
             
-            print("✅ Resend successful!")
-            print("👤 User: \(account.name)")
-            
             if rememberMe {
                 try keychainService.saveCredentials(credentials)
-                print("💾 Credentials saved to keychain")
             }
             
             try keychainService.saveAccount(account)
-            print("💾 Account saved to keychain")
             
             loginState = .success(account)
-            
+            saveUserEmail()
         } catch LoginError.twoFactorRequired {
-            print("🔐 2FA required after resend")
             showAuthCodeField = true
             loginState = .requires2FA
             errorMessage = "New verification code sent. Please check your device."
             
         } catch LoginError.invalidCredentials {
-            print("❌ Invalid credentials during resend")
             loginState = .error("Invalid Apple ID or password")
             errorMessage = "Invalid Apple ID or password"
             
         } catch {
-            print("❌ Resend error: \(error)")
             loginState = .error(error.localizedDescription)
             errorMessage = error.localizedDescription
         }
     }
 
     func logout(withMessage message: String? = nil) async {
-        print("🔓 ViewModel logout is starting...")
-
         do {
             try await appStoreService.logout()
 
@@ -162,17 +145,18 @@ final class LoginViewModel: ObservableObject {
             if let message {
                 toastMessage = message
             }
-
-            print("✅ ViewModel logout completed")
-
         } catch {
-            print("❌ ViewModel logout error: \(error)")
             errorMessage = "An error occurred while logging out.: \(error.localizedDescription)"
             loginState = .error(error.localizedDescription)
         }
     }
 
-    // MARK: - Private Methods
+    // MARK: - PRIVATE FUNCTIONS
+
+    private func saveUserEmail() {
+        UserDefaults.standard.set(email, forKey: "lastEmail")
+    }
+
     private func setupBindings() {
         $email
             .dropFirst()
@@ -203,6 +187,7 @@ final class LoginViewModel: ObservableObject {
                     let isValid = try await appStoreService.validateToken(account.passwordToken)
                     if isValid {
                         loginState = .success(account)
+                        saveUserEmail()
                     } else {
                         loginState = .idle
                     }
