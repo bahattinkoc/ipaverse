@@ -92,9 +92,8 @@ final class LoginVM: ObservableObject {
     }
 
     func resetToLoginForm() {
-        showAuthCodeField = false
         authCode = ""
-        errorMessage = ""
+        resetForm()
         loginState = .idle
     }
     

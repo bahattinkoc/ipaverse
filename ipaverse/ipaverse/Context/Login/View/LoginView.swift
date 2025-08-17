@@ -9,233 +9,244 @@ import SwiftUI
 
 struct LoginView: View {
     @EnvironmentObject var viewModel: LoginVM
+    @FocusState private var focusedField: Field?
+
+    enum Field {
+        case email, password, authCode
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                headerView
-
-                ScrollView {
-                    VStack(spacing: 32) {
-                        logoSection
-
-                        loginFormSection
-
-                        if !viewModel.errorMessage.isEmpty {
-                            errorMessageView
+        VStack(spacing: 0) {
+            if viewModel.showAuthCodeField {
+                HStack {
+                    Button(action: {
+                        viewModel.resetToLoginForm()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Back")
+                                .font(.system(size: 14, weight: .medium))
                         }
-
-                        if viewModel.showAuthCodeField {
-                            twoFactorSection
-                        }
-
-                        loginButtonSection
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.secondary.opacity(0.1))
+                        .cornerRadius(8)
                     }
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 20)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.escape, modifiers: [])
+                    
+                    Spacer()
                 }
-
-                Spacer()
+                .padding(.horizontal, 32)
+                .padding(.top, 16)
             }
-            .background(.background)
-            .navigationTitle("")
-            .toast(
-                message: viewModel.toastMessage,
-                isPresented: Binding(
-                    get: { !viewModel.toastMessage.isEmpty },
-                    set: { if !$0 { viewModel.toastMessage = "" } }
-                )
+            
+            ScrollView {
+                VStack(spacing: 40) {
+                    logoSection
+
+                    if viewModel.showAuthCodeField {
+                        twoFactorSection
+                    } else {
+                        loginFormSection
+                    }
+
+                    if !viewModel.errorMessage.isEmpty {
+                        errorMessageView
+                    }
+                }
+                .padding(.horizontal, 32)
+                .padding(.top, 24)
+                .padding(.bottom, 40)
+            }
+            
+            VStack(spacing: 0) {
+                Divider()
+                    .opacity(0.3)
+                
+                loginButtonSection
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
+                    .background(.regularMaterial)
+            }
+        }
+        .toast(
+            message: viewModel.toastMessage,
+            isPresented: Binding(
+                get: { !viewModel.toastMessage.isEmpty },
+                set: { if !$0 { viewModel.toastMessage = "" } }
             )
-        }
+        )
     }
 
-    // MARK: - Header View
-    private var headerView: some View {
-        HStack {
-            Text("ipaverse")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .foregroundColor(.primary)
-
-            Spacer()
-
-            Button("Settings") {
-                // TODO: - Settings action
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(.background)
-    }
-
-    // MARK: - Logo Section
     private var logoSection: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             LinearGradient(
-                colors: [.blue, .purple, .black],
+                colors: [.blue, .purple, .indigo],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            .frame(width: 120, height: 120)
+            .frame(width: 100, height: 100)
             .mask(
                 Image("logo")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
             )
-
-            Text("Sign in with Apple ID")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-
-            Text("Sign in to discover and download App Store apps")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+            .shadow(color: .blue.opacity(0.3), radius: 20, x: 0, y: 10)
         }
-        .padding(.top, 40)
+        .padding(.top, 20)
     }
 
-    // MARK: - Login Form Section
     private var loginFormSection: some View {
-        VStack(spacing: 20) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Apple ID")
-                    .font(.headline)
+        VStack(spacing: 24) {
+            VStack(spacing: 16) {
+                Text("Welcome Back")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
 
-                TextField("Apple ID or email address", text: $viewModel.email)
-                    .textFieldStyle(.roundedBorder)
-                    .disableAutocorrection(true)
-                    .onSubmit {
-                        if !viewModel.email.isEmpty && !viewModel.password.isEmpty {
-                            Task {
-                                await viewModel.login()
-                            }
-                        }
-                    }
+                Text("Sign in to your Apple ID to continue")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
+            .padding(.bottom, 8)
 
-            SecureTextField(
+            ModernTextField(
+                title: "Apple ID",
+                placeholder: "Enter your Apple ID or email",
+                text: $viewModel.email,
+                icon: "person.circle.fill"
+            )
+            .focused($focusedField, equals: .email)
+
+            ModernSecureTextField(
                 title: "Password",
                 placeholder: "Enter your password",
-                text: $viewModel.password,
-                errorMessage: nil
+                text: $viewModel.password
             )
-            .onSubmit {
-                if !viewModel.email.isEmpty && !viewModel.password.isEmpty {
-                    Task {
-                        await viewModel.login()
-                    }
-                }
-            }
+            .focused($focusedField, equals: .password)
 
             HStack {
-                Toggle("Remember Me", isOn: $viewModel.rememberMe)
-                    .toggleStyle(CheckboxToggleStyle())
+                Toggle("Remember me", isOn: $viewModel.rememberMe)
+                    .toggleStyle(ModernCheckboxToggleStyle())
 
                 Spacer()
             }
+            .padding(.top, 8)
         }
         .task {
             viewModel.loadUserEmail()
         }
     }
 
-    // MARK: - Two Factor Section
     private var twoFactorSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Verification Code")
-                .font(.headline)
-                .foregroundColor(.primary)
+        VStack(spacing: 24) {
+            VStack(spacing: 16) {
+                Text("Two-Factor Authentication")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
 
-            TextField("Enter the 6-digit code", text: $viewModel.authCode)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    if !viewModel.authCode.isEmpty {
-                        Task {
-                            await viewModel.handle2FA(viewModel.authCode)
-                        }
+                Text("Enter the 6-digit verification code sent to your trusted device")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.bottom, 8)
+
+            VStack(spacing: 16) {
+                Text("Verification Code")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 12) {
+                    ForEach(0..<6, id: \.self) { index in
+                        ModernAuthCodeField(
+                            text: Binding(
+                                get: { String(viewModel.authCode.dropFirst(index).prefix(1)) },
+                                set: { newValue in
+                                    if newValue.count <= 1 {
+                                        if newValue.isEmpty {
+                                            viewModel.authCode = String(viewModel.authCode.prefix(index))
+                                        } else {
+                                            let currentCode = viewModel.authCode
+                                            if index < currentCode.count {
+                                                viewModel.authCode = String(currentCode.prefix(index)) + newValue + String(currentCode.dropFirst(index + 1))
+                                            } else {
+                                                viewModel.authCode = currentCode + newValue
+                                            }
+                                        }
+
+                                        if newValue.count == 1 && index < 5 {
+                                            focusedField = .authCode
+                                        }
+                                    }
+                                }
+                            ),
+                            isFocused: focusedField == .authCode
+                        )
                     }
                 }
+            }
         }
+        .padding(.vertical, 8)
     }
 
-    // MARK: - Error Message View
     private var errorMessageView: some View {
-        HStack {
+        HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.red)
+                .font(.title3)
 
             Text(viewModel.errorMessage)
-                .font(.body)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.red)
 
             Spacer()
         }
-        .padding()
+        .padding(16)
         .background(Color.red.opacity(0.1))
-        .cornerRadius(8)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.red.opacity(0.3), lineWidth: 1)
+        )
     }
 
-    // MARK: - Login Button Section
     private var loginButtonSection: some View {
-        VStack(spacing: 16) {
-            LoadingButton(
-                title: viewModel.showAuthCodeField ? "Verify" : "Log in",
-                isLoading: viewModel.isLoading,
-                isEnabled: Binding(
-                    get: { viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty) },
-                    set: { _ in }
-                )
-            ) {
+        VStack(spacing: 20) {
+            HStack(spacing: 8) {
+                ModernLoadingButton(
+                    title: viewModel.showAuthCodeField ? "Verify Code" : "Sign In",
+                    isLoading: viewModel.isLoading,
+                    isEnabled: Binding(
+                        get: { viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty) },
+                        set: { _ in }
+                    )
+                ) {
+                    if viewModel.showAuthCodeField {
+                        await viewModel.handle2FA(viewModel.authCode)
+                    } else {
+                        await viewModel.login()
+                    }
+                }
+
                 if viewModel.showAuthCodeField {
-                    await viewModel.handle2FA(viewModel.authCode)
-                } else {
-                    await viewModel.login()
-                }
-            }
-
-            if viewModel.showAuthCodeField {
-                VStack(spacing: 12) {
-                    Button("Resend verification code") {
-                        Task {
-                            await viewModel.resendAuthCode()
+                    ModernSecondaryButton(
+                        title: "",
+                        icon: "arrow.clockwise",
+                        action: {
+                            Task {
+                                await viewModel.resendAuthCode()
+                            }
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.blue)
-                    .disabled(viewModel.isLoading)
-
-                    Button("Change Password") {
-                        viewModel.resetToLoginForm()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.orange)
+                    )
                 }
             }
+            .frame(height: 56)
         }
-    }
-}
-
-// MARK: - Checkbox Toggle Style
-struct CheckboxToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack {
-            Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square")
-                .foregroundColor(configuration.isOn ? .blue : .gray)
-                .font(.title2)
-
-            configuration.label
-                .font(.body)
-                .foregroundColor(.primary)
-
-            Spacer()
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            configuration.isOn.toggle()
-        }
+        .padding(.top, 8)
     }
 }
