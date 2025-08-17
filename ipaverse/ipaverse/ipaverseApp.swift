@@ -11,9 +11,11 @@ import SwiftData
 @main
 struct ipaverseApp: App {
     var body: some Scene {
-        WindowGroup {
+        Window("ipaverse", id: "main") {
             ContentView()
+                .fixedWindow(width: 400, height: 600)
         }
+        .windowResizability(.contentSize)
         .modelContainer(for: DownloadedApp.self)
     }
 }
