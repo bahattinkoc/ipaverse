@@ -14,10 +14,10 @@ struct ContentView: View {
     var body: some View {
         Group {
             switch loginViewModel.loginState {
-            case .idle, .loading:
+            case .loading:
                 SplashView()
                 
-            case .error, .requires2FA:
+            case .idle, .error, .requires2FA:
                 LoginView()
                     .environmentObject(loginViewModel)
 

@@ -13,7 +13,7 @@ final class LoginVM: ObservableObject {
 
     // MARK: - PUBLISHED PROPERTIES
 
-    @Published var loginState: LoginState = .idle
+    @Published var loginState: LoginState = .loading
     @Published var email: String = ""
     @Published var password: String = ""
     @Published var authCode: String = ""
