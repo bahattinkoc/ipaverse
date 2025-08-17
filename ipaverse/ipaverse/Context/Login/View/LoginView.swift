@@ -12,7 +12,7 @@ struct LoginView: View {
     @FocusState private var focusedField: Field?
 
     enum Field {
-        case email, password, authCode
+        case email, password
     }
 
     var body: some View {
@@ -161,34 +161,7 @@ struct LoginView: View {
                     .foregroundColor(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 12) {
-                    ForEach(0..<6, id: \.self) { index in
-                        ModernAuthCodeField(
-                            text: Binding(
-                                get: { String(viewModel.authCode.dropFirst(index).prefix(1)) },
-                                set: { newValue in
-                                    if newValue.count <= 1 {
-                                        if newValue.isEmpty {
-                                            viewModel.authCode = String(viewModel.authCode.prefix(index))
-                                        } else {
-                                            let currentCode = viewModel.authCode
-                                            if index < currentCode.count {
-                                                viewModel.authCode = String(currentCode.prefix(index)) + newValue + String(currentCode.dropFirst(index + 1))
-                                            } else {
-                                                viewModel.authCode = currentCode + newValue
-                                            }
-                                        }
-
-                                        if newValue.count == 1 && index < 5 {
-                                            focusedField = .authCode
-                                        }
-                                    }
-                                }
-                            ),
-                            isFocused: focusedField == .authCode
-                        )
-                    }
-                }
+                OTPVerificationView(otpText: $viewModel.authCode)
             }
         }
         .padding(.vertical, 8)
