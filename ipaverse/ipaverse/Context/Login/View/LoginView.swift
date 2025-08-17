@@ -72,9 +72,17 @@ struct LoginView: View {
     // MARK: - Logo Section
     private var logoSection: some View {
         VStack(spacing: 16) {
-            Image(systemName: "apple.logo")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
+            LinearGradient(
+                colors: [.blue, .purple, .black],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(width: 120, height: 120)
+            .mask(
+                Image("logo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            )
 
             Text("Sign in with Apple ID")
                 .font(.title2)
