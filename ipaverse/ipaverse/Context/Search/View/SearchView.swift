@@ -12,26 +12,27 @@ struct SearchView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginVM
     @Environment(\.modelContext) private var modelContext
-    @State private var searchText = ""
-    @State private var searchResults: [AppStoreApp] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-    @State private var isSearching = false
-    @State private var showingSavePanel = false
-    @State private var currentDownloadApp: AppStoreApp?
-    @State private var downloadProgress: Double = 0
-    @State private var isDownloading = false
+    @StateObject private var viewModel: SearchVM
+
+    init(account: Account) {
+        self.account = account
+        self._viewModel = StateObject(wrappedValue: SearchVM(account: account))
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchBar
 
+                if !viewModel.searchHistory.isEmpty {
+                    recentSearches
+                }
+
                 Group {
-                    if isLoading {
+                    if viewModel.isLoading {
                         ProgressView("Searching...")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let error = errorMessage {
+                    } else if let error = viewModel.errorMessage {
                         VStack(spacing: 16) {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(.system(size: 48))
@@ -47,12 +48,12 @@ struct SearchView: View {
                                 .multilineTextAlignment(.center)
 
                             Button("Retry") {
-                                performSearch()
+                                viewModel.performSearch()
                             }
                             .buttonStyle(.borderedProminent)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if searchResults.isEmpty && !searchText.isEmpty && !isSearching {
+                    } else if viewModel.searchResults.isEmpty && !viewModel.searchText.isEmpty && !viewModel.isSearching {
                         VStack(spacing: 16) {
                             Image(systemName: "magnifyingglass")
                                 .font(.system(size: 48))
@@ -68,7 +69,7 @@ struct SearchView: View {
                                 .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if searchText.isEmpty {
+                    } else if viewModel.searchText.isEmpty {
                         VStack(spacing: 16) {
                             Image(systemName: "magnifyingglass")
                                 .font(.system(size: 48))
@@ -85,24 +86,60 @@ struct SearchView: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        List(searchResults) { app in
-                            SearchResultRow(app: app, isDownloading: isDownloading && currentDownloadApp?.id == app.id, downloadProgress: downloadProgress) {
-                                downloadApp(app)
+                        List(viewModel.searchResults) { app in
+                            SearchResultRow(
+                                app: app,
+                                isDownloading: viewModel.isDownloading && viewModel.currentDownloadApp?.id == app.id,
+                                downloadProgress: viewModel.downloadProgress
+                            ) {
+                                viewModel.downloadApp(app)
                             }
                         }
                         .refreshable {
-                            performSearch()
+                            viewModel.performSearch()
                         }
                     }
                 }
             }
             .navigationTitle("Search")
-            .onChange(of: showingSavePanel) { _, newValue in
+            .onChange(of: viewModel.showingSavePanel) { _, newValue in
                 if newValue {
-                    showSavePanel()
+                    viewModel.showSavePanel()
                 }
             }
         }
+        .onAppear {
+            viewModel.setup(modelContext: modelContext, loginViewModel: loginViewModel)
+        }
+    }
+
+    private var recentSearches: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent Searches")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.searchHistory, id: \.self) { searchTerm in
+                        Button(action: {
+                            viewModel.selectSearchTerm(searchTerm)
+                        }) {
+                            Text(searchTerm)
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(16)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+        .padding(.bottom, 8)
     }
 
     private var searchBar: some View {
@@ -111,17 +148,15 @@ struct SearchView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.gray)
 
-                TextField("Search apps...", text: $searchText)
+                TextField("Search apps...", text: $viewModel.searchText)
                     .textFieldStyle(PlainTextFieldStyle())
                     .onSubmit {
-                        performSearch()
+                        viewModel.performSearch()
                     }
 
-                if !searchText.isEmpty {
+                if !viewModel.searchText.isEmpty {
                     Button(action: {
-                        searchText = ""
-                        searchResults = []
-                        errorMessage = nil
+                        viewModel.clearSearch()
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.gray)
@@ -136,103 +171,5 @@ struct SearchView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-    }
-
-    private func performSearch() {
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-
-        isLoading = true
-        errorMessage = nil
-        isSearching = true
-
-        Task {
-            do {
-                let appStoreService = AppStoreService()
-                let result = try await appStoreService.search(
-                    term: searchText.trimmingCharacters(in: .whitespacesAndNewlines),
-                    account: account,
-                    limit: 5
-                )
-
-                guard let results = result.results else { return }
-
-                await MainActor.run {
-                    searchResults = results
-                    isLoading = false
-                    isSearching = false
-                }
-
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Search failed: \(error.localizedDescription)"
-                    isLoading = false
-                    isSearching = false
-                }
-            }
-        }
-    }
-
-    private func downloadApp(_ app: AppStoreApp) {
-        currentDownloadApp = app
-        showingSavePanel = true
-    }
-
-    private func startDownload(at url: URL) {
-        guard let app = currentDownloadApp else { return }
-
-        isDownloading = true
-        downloadProgress = 0
-
-        Task {
-            do {
-                let appStoreService = AppStoreService()
-                let output = try await appStoreService.download(
-                    app: app,
-                    account: account,
-                    outputPath: url.path,
-                    progress: { progress in
-                        Task { @MainActor in
-                            downloadProgress = progress
-                        }
-                    },
-                    modelContext: modelContext
-                )
-
-                if output.success {
-                    await MainActor.run {
-                        isDownloading = false
-                        downloadProgress = 1.0
-                    }
-                }
-
-            } catch {
-                if let loginError = error as? LoginError, loginError == .tokenExpired {
-                    await loginViewModel.logout(withMessage: "Session expired. Please login again.")
-                } else {
-                    await MainActor.run {
-                        errorMessage = "Download failed: \(error.localizedDescription)"
-                        isDownloading = false
-                        downloadProgress = 0
-                    }
-                }
-            }
-        }
-    }
-
-    private func showSavePanel() {
-        guard let app = currentDownloadApp else { return }
-
-        let savePanel = NSSavePanel()
-        savePanel.title = "Save IPA File"
-        savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(app.version ?? "").ipa"
-        savePanel.allowedContentTypes = [.init(filenameExtension: "ipa")!]
-        savePanel.canCreateDirectories = true
-
-        savePanel.begin { response in
-            if response == .OK, let url = savePanel.url {
-                startDownload(at: url)
-            }
-            showingSavePanel = false
-        }
     }
 }
