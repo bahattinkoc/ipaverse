@@ -126,19 +126,13 @@ struct SearchView: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.gray)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(10)
-
-            if !searchText.isEmpty {
-                Button("Search") {
-                    performSearch()
-                }
-                .buttonStyle(.borderedProminent)
-            }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
