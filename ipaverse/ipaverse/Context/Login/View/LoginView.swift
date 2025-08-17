@@ -108,6 +108,13 @@ struct LoginView: View {
                 TextField("Apple ID or email address", text: $viewModel.email)
                     .textFieldStyle(.roundedBorder)
                     .disableAutocorrection(true)
+                    .onSubmit {
+                        if !viewModel.email.isEmpty && !viewModel.password.isEmpty {
+                            Task {
+                                await viewModel.login()
+                            }
+                        }
+                    }
             }
 
             SecureTextField(
@@ -116,6 +123,13 @@ struct LoginView: View {
                 text: $viewModel.password,
                 errorMessage: nil
             )
+            .onSubmit {
+                if !viewModel.email.isEmpty && !viewModel.password.isEmpty {
+                    Task {
+                        await viewModel.login()
+                    }
+                }
+            }
 
             HStack {
                 Toggle("Remember Me", isOn: $viewModel.rememberMe)
@@ -138,6 +152,13 @@ struct LoginView: View {
 
             TextField("Enter the 6-digit code", text: $viewModel.authCode)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if !viewModel.authCode.isEmpty {
+                        Task {
+                            await viewModel.handle2FA(viewModel.authCode)
+                        }
+                    }
+                }
         }
     }
 
@@ -164,7 +185,10 @@ struct LoginView: View {
             LoadingButton(
                 title: viewModel.showAuthCodeField ? "Verify" : "Log in",
                 isLoading: viewModel.isLoading,
-                isEnabled: viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty)
+                isEnabled: Binding(
+                    get: { viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty) },
+                    set: { _ in }
+                )
             ) {
                 if viewModel.showAuthCodeField {
                     await viewModel.handle2FA(viewModel.authCode)
