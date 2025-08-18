@@ -12,59 +12,74 @@ import SwiftData
 final class SearchVM: ObservableObject {
     @Published var searchText = ""
     @Published var searchResults: [AppStoreApp] = []
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    @Published var isSearching = false
-    @Published var showingSavePanel = false
-    @Published var currentDownloadApp: AppStoreApp?
-    @Published var downloadProgress: Double = 0
-    @Published var isDownloading = false
     @Published var searchHistory: [String] = []
-    
+    @Published var isLoading = false
+    @Published var isSearching = false
+    @Published var errorMessage: String?
+    @Published var showingSavePanel = false
+    @Published var isDownloading = false
+    @Published var downloadProgress: Double = 0
+
+    var currentDownloadApp: AppStoreApp?
     private let account: Account
-    var modelContext: ModelContext!
-    var loginViewModel: LoginVM!
-    
+    private var modelContext: ModelContext?
+    private var loginViewModel: LoginVM?
+
     init(account: Account) {
         self.account = account
         loadSearchHistory()
+        setupNotificationObserver()
     }
-    
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     func setup(modelContext: ModelContext, loginViewModel: LoginVM) {
         self.modelContext = modelContext
         self.loginViewModel = loginViewModel
     }
-    
+
+    private func setupNotificationObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .searchHistoryCleared,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.searchHistory = []
+        }
+    }
+
     func loadSearchHistory() {
         if let history = UserDefaults.standard.array(forKey: "SearchHistory") as? [String] {
             searchHistory = Array(history.prefix(5))
         }
     }
-    
+
     func saveSearchHistory() {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSearch.isEmpty else { return }
-        
+
         var history = UserDefaults.standard.array(forKey: "SearchHistory") as? [String] ?? []
-        
+
         if let index = history.firstIndex(of: trimmedSearch) {
             history.remove(at: index)
         }
-        
+
         history.insert(trimmedSearch, at: 0)
         history = Array(history.prefix(5))
-        
+
         UserDefaults.standard.set(history, forKey: "SearchHistory")
         searchHistory = history
     }
-    
+
     func performSearch() {
         guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         isLoading = true
         errorMessage = nil
         isSearching = true
-        
+
         saveSearchHistory()
 
         Task {
@@ -89,23 +104,23 @@ final class SearchVM: ObservableObject {
             }
         }
     }
-    
+
     func clearSearch() {
         searchText = ""
         searchResults = []
         errorMessage = nil
     }
-    
+
     func selectSearchTerm(_ term: String) {
         searchText = term
         performSearch()
     }
-    
+
     func downloadApp(_ app: AppStoreApp) {
         currentDownloadApp = app
         showingSavePanel = true
     }
-    
+
     func startDownload(at url: URL) {
         guard let app = currentDownloadApp else { return }
 
@@ -134,7 +149,7 @@ final class SearchVM: ObservableObject {
 
             } catch {
                 if let loginError = error as? LoginError, loginError == .tokenExpired {
-                    await loginViewModel.logout(withMessage: "Session expired. Please login again.")
+                    await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
                 } else {
                     errorMessage = "Download failed: \(error.localizedDescription)"
                     isDownloading = false
@@ -143,14 +158,19 @@ final class SearchVM: ObservableObject {
             }
         }
     }
-    
+
     func showSavePanel() {
         guard let app = currentDownloadApp else { return }
 
         let savePanel = NSSavePanel()
-        savePanel.title = "Save IPA File"
-        savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(app.version ?? "").ipa"
-        savePanel.allowedContentTypes = [.init(filenameExtension: "ipa")!]
+        savePanel.title = "Save App File"
+
+        let downloadType = getDownloadTypeFromSettings()
+        let fileExtension = downloadType.rawValue
+        let fileName = "\(app.bundleID ?? "")_\(app.version ?? "").\(fileExtension)"
+
+        savePanel.nameFieldStringValue = fileName
+        savePanel.allowedContentTypes = [.init(filenameExtension: fileExtension)!]
         savePanel.canCreateDirectories = true
 
         savePanel.begin { [weak self] response in
@@ -159,5 +179,17 @@ final class SearchVM: ObservableObject {
             }
             self?.showingSavePanel = false
         }
+    }
+
+    private func getDownloadTypeFromSettings() -> DownloadType {
+        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
+           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data) {
+            return settings.defaultDownloadType
+        }
+        return .ipa
+    }
+
+    func refreshSearchHistory() {
+        loadSearchHistory()
     }
 }

@@ -102,44 +102,15 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("Search")
-            .onChange(of: viewModel.showingSavePanel) { _, newValue in
-                if newValue {
-                    viewModel.showSavePanel()
-                }
+            .onAppear {
+                viewModel.setup(modelContext: modelContext, loginViewModel: loginViewModel)
             }
         }
-        .onAppear {
-            viewModel.setup(modelContext: modelContext, loginViewModel: loginViewModel)
-        }
-    }
-
-    private var recentSearches: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recent Searches")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(viewModel.searchHistory, id: \.self) { searchTerm in
-                        Button(action: {
-                            viewModel.selectSearchTerm(searchTerm)
-                        }) {
-                            Text(searchTerm)
-                                .font(.caption)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color(NSColor.controlBackgroundColor))
-                                .cornerRadius(16)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal)
+        .onChange(of: viewModel.showingSavePanel) { _, newValue in
+            if newValue {
+                viewModel.showSavePanel()
             }
         }
-        .padding(.bottom, 8)
     }
 
     private var searchBar: some View {
@@ -171,5 +142,34 @@ struct SearchView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    private var recentSearches: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent Searches")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.searchHistory, id: \.self) { searchTerm in
+                        Button(action: {
+                            viewModel.selectSearchTerm(searchTerm)
+                        }) {
+                            Text(searchTerm)
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(16)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+        .padding(.bottom, 8)
     }
 }

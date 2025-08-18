@@ -11,7 +11,8 @@ struct MainView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginVM
     @State private var selectedTab = 0
-
+    @State private var showingSettings = false
+    
     var body: some View {
         NavigationStack {
             TabView(selection: $selectedTab) {
@@ -32,12 +33,17 @@ struct MainView: View {
             .navigationTitle("ipaverse")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Log Out") {
-                        Task {
-                            await loginViewModel.logout()
-                        }
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.title2)
                     }
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+                    .environmentObject(loginViewModel)
             }
         }
     }
