@@ -8,6 +8,12 @@
 import SwiftUI
 import SwiftData
 
+enum DownloadState {
+    case idle
+    case purchasing
+    case downloading(progress: Double)
+}
+
 @MainActor
 final class SearchVM: ObservableObject {
     @Published var searchText = ""
@@ -17,8 +23,7 @@ final class SearchVM: ObservableObject {
     @Published var isSearching = false
     @Published var errorMessage: String?
     @Published var showingSavePanel = false
-    @Published var isDownloading = false
-    @Published var downloadProgress: Double = 0
+    @Published var downloadState: DownloadState = .idle
 
     var currentDownloadApp: AppStoreApp?
     private let account: Account
@@ -124,8 +129,7 @@ final class SearchVM: ObservableObject {
     func startDownload(at url: URL) {
         guard let app = currentDownloadApp else { return }
 
-        isDownloading = true
-        downloadProgress = 0
+        downloadState = .purchasing
 
         Task {
             do {
@@ -136,15 +140,14 @@ final class SearchVM: ObservableObject {
                     outputPath: url.path,
                     progress: { progress in
                         Task { @MainActor in
-                            self.downloadProgress = progress
+                            self.downloadState = .downloading(progress: progress)
                         }
                     },
                     modelContext: modelContext
                 )
 
                 if output.success {
-                    isDownloading = false
-                    downloadProgress = 1.0
+                    downloadState = .idle
                 }
 
             } catch {
@@ -152,8 +155,7 @@ final class SearchVM: ObservableObject {
                     await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
                 } else {
                     errorMessage = "Download failed: \(error.localizedDescription)"
-                    isDownloading = false
-                    downloadProgress = 0
+                    downloadState = .idle
                 }
             }
         }

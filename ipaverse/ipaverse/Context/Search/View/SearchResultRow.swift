@@ -9,8 +9,7 @@ import SwiftUI
 
 struct SearchResultRow: View {
     let app: AppStoreApp
-    let isDownloading: Bool
-    let downloadProgress: Double
+    let downloadState: DownloadState
     let onDownload: () -> Void
 
     var body: some View {
@@ -57,25 +56,53 @@ struct SearchResultRow: View {
 
             Spacer()
 
-            if isDownloading {
-                VStack(spacing: 4) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-
-                    Text("\(Int(downloadProgress * 100))%")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                .frame(width: 50)
-            } else {
-                Button(action: onDownload) {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundColor(.blue)
-                }
-                .buttonStyle(.plain)
-                .disabled(isDownloading)
-            }
+            downloadStateView
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var downloadStateView: some View {
+        switch downloadState {
+        case .idle:
+            Button(action: onDownload) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundColor(.blue)
+                    .font(.title2)
+            }
+            .buttonStyle(.plain)
+
+        case .purchasing:
+            VStack(spacing: 4) {
+                Text("Purchasing...")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .allowsTightening(true)
+            }
+            .frame(width: 60)
+
+        case .downloading(let progress):
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.blue.opacity(0.2), lineWidth: 3)
+                        .frame(width: 24, height: 24)
+
+                    Circle()
+                        .trim(from: 0, to: progress)
+                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 24, height: 24)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.2), value: progress)
+                }
+
+                Text("\(Int(progress * 100))%")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 60)
+        }
     }
 }

@@ -89,8 +89,7 @@ struct SearchView: View {
                         List(viewModel.searchResults) { app in
                             SearchResultRow(
                                 app: app,
-                                isDownloading: viewModel.isDownloading && viewModel.currentDownloadApp?.id == app.id,
-                                downloadProgress: viewModel.downloadProgress
+                                downloadState: viewModel.currentDownloadApp?.id == app.id ? viewModel.downloadState : .idle
                             ) {
                                 viewModel.downloadApp(app)
                             }

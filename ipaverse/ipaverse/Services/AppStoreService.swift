@@ -251,7 +251,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var purchased = false
 
         do {
-            _ = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
+            _ = try await checkLicense(app: app, account: account)
             purchased = true
         } catch {
             if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
@@ -282,7 +282,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         return result
     }
 
-    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
+    private func checkLicense(app: AppStoreApp, account: Account) async throws {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -332,6 +332,45 @@ final class AppStoreService: AppStoreServiceProtocol {
                 throw LoginError.unknownError(customerMessage)
             }
         }
+    }
+
+    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
+        let deviceID = try await getDeviceIdentifier()
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+
+        let downloadURL = "https://\(Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
+
+        guard let url = URL(string: downloadURL) else {
+            throw LoginError.networkError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+
+        let payload: [String: Any] = [
+            "creditDisplay": "",
+            "guid": guid,
+            "salableAdamId": app.id ?? 0
+        ]
+
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: payload,
+            format: .xml,
+            options: 0
+        )
+        request.httpBody = plistData
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let _ = response as? HTTPURLResponse else {
+            throw LoginError.networkError
+        }
+
+        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
 
         guard let items = plist?["songList"] as? [[String: Any]],
               let firstItem = items.first,
@@ -343,7 +382,9 @@ final class AppStoreService: AppStoreServiceProtocol {
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
 
-        sessionDelegate.progressHandler = progress
+        if let progress {
+            sessionDelegate.progressHandler = progress
+        }
 
         var downloadRequest = URLRequest(url: downloadURL)
         downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
