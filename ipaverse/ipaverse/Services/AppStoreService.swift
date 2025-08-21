@@ -276,7 +276,11 @@ final class AppStoreService: AppStoreServiceProtocol {
         let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
 
         if result.success, let modelContext {
-            await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
+            if let existingApp = await findExistingDownloadedApp(app: app, context: modelContext) {
+                await updateDownloadedApp(app: app, newFilePath: result.destinationPath, context: modelContext)
+            } else {
+                await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
+            }
         }
 
         return result
@@ -659,6 +663,42 @@ final class AppStoreService: AppStoreServiceProtocol {
             try context.save()
         } catch {
             print("❌ Failed to save downloaded app to SwiftData: \(error)")
+        }
+    }
+
+    @MainActor
+    private func findExistingDownloadedApp(app: AppStoreApp, context: ModelContext) async -> DownloadedApp? {
+        do {
+            let descriptor = FetchDescriptor<DownloadedApp>(
+                predicate: #Predicate<DownloadedApp> { downloadedApp in
+                    downloadedApp.appId == (app.id ?? 0)
+                }
+            )
+
+            let existingApps = try context.fetch(descriptor)
+            return existingApps.first
+        } catch {
+            print("❌ Failed to find existing downloaded app in SwiftData: \(error)")
+            return nil
+        }
+    }
+
+    @MainActor
+    private func updateDownloadedApp(app: AppStoreApp, newFilePath: String, context: ModelContext) async {
+        do {
+            let descriptor = FetchDescriptor<DownloadedApp>(
+                predicate: #Predicate<DownloadedApp> { downloadedApp in
+                    downloadedApp.appId == (app.id ?? 0)
+                }
+            )
+
+            let existingApps = try context.fetch(descriptor)
+            if let existingApp = existingApps.first {
+                existingApp.filePath = newFilePath
+                try context.save()
+            }
+        } catch {
+            print("❌ Failed to update downloaded app in SwiftData: \(error)")
         }
     }
 }
