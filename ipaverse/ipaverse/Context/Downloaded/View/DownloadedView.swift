@@ -14,6 +14,7 @@ struct DownloadedView: View {
     @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var downloadStates: [String: DownloadState] = [:]
 
     var body: some View {
         NavigationStack {
@@ -60,7 +61,10 @@ struct DownloadedView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(downloadedApps) { downloadedApp in
-                        DownloadedAppRow(downloadedApp: downloadedApp) {
+                        DownloadedAppRow(
+                            downloadedApp: downloadedApp,
+                            downloadState: downloadStates[downloadedApp.id] ?? .idle
+                        ) {
                             redownloadApp(downloadedApp)
                         }
                     }
@@ -73,6 +77,9 @@ struct DownloadedView: View {
         }
         .onAppear {
             loadDownloadedApps()
+        }
+        .onDisappear {
+            downloadStates.removeAll()
         }
     }
 
@@ -88,6 +95,12 @@ struct DownloadedView: View {
     }
 
     private func redownloadApp(_ downloadedApp: DownloadedApp) {
+        let appId = downloadedApp.id
+        
+        Task { @MainActor in
+            downloadStates[appId] = .purchasing
+        }
+        
         Task {
             do {
                 let appStoreService = AppStoreService()
@@ -104,16 +117,26 @@ struct DownloadedView: View {
                     app: app,
                     account: account,
                     outputPath: downloadedApp.filePath,
+                    progress: { progress, bytesWritten, totalBytes in
+                        Task { @MainActor in
+                            if progress >= 1.0 {
+                                downloadStates[appId] = .idle
+                            } else {
+                                downloadStates[appId] = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
+                            }
+                        }
+                    },
                     modelContext: modelContext
                 )
 
-                if output.success {
-                    await MainActor.run {
-                        loadDownloadedApps()
+                await MainActor.run {
+                    if !output.success {
+                        errorMessage = "Redownload failed: \(output.error ?? "Unknown error")"
                     }
                 }
             } catch {
                 await MainActor.run {
+                    downloadStates[appId] = .idle
                     errorMessage = "Failed to redownload: \(error.localizedDescription)"
                 }
             }

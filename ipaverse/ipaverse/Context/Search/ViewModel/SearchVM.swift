@@ -11,7 +11,7 @@ import SwiftData
 enum DownloadState {
     case idle
     case purchasing
-    case downloading(progress: Double)
+    case downloading(progress: Double, bytesWritten: Int64, totalBytes: Int64)
 }
 
 @MainActor
@@ -134,22 +134,21 @@ final class SearchVM: ObservableObject {
         Task {
             do {
                 let appStoreService = AppStoreService()
-                let output = try await appStoreService.download(
+                let _ = try await appStoreService.download(
                     app: app,
                     account: account,
                     outputPath: url.path,
-                    progress: { progress in
+                    progress: { progress, bytesWritten, totalBytes in
                         Task { @MainActor in
-                            self.downloadState = .downloading(progress: progress)
+                            if progress >= 1.0 {
+                                self.downloadState = .idle
+                            } else {
+                                self.downloadState = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
+                            }
                         }
                     },
                     modelContext: modelContext
                 )
-
-                if output.success {
-                    downloadState = .idle
-                }
-
             } catch {
                 if let loginError = error as? LoginError, loginError == .tokenExpired {
                     await loginViewModel?.logout(withMessage: "Session expired. Please login again.")

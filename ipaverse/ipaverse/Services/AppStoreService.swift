@@ -16,7 +16,7 @@ protocol AppStoreServiceProtocol {
     func logout() async throws
     func search(term: String, account: Account, limit: Int) async throws -> SearchResult
     func purchase(app: AppStoreApp, account: Account) async throws
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
 }
 
 final class AppStoreService: AppStoreServiceProtocol {
@@ -247,7 +247,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Download
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
+    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
         var purchased = false
 
         do {
@@ -334,7 +334,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
     }
 
-    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double) -> Void)? = nil) async throws -> DownloadOutput {
+    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)? = nil) async throws -> DownloadOutput {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -691,7 +691,8 @@ struct LoginParseResult {
 
 // MARK: - URLSession Delegate for Redirect Handling
 final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate {
-    var progressHandler: ((Double) -> Void)?
+    var progressHandler: ((Double, Int64, Int64) -> Void)?
+    private var hasStartedProgress = false
 
     func urlSession(
         _ session: URLSession,
@@ -709,12 +710,18 @@ final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSes
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if !hasStartedProgress {
+            progressHandler?(0.0, 0, totalBytesExpectedToWrite)
+            hasStartedProgress = true
+        }
+
         let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        progressHandler?(progress)
+        progressHandler?(progress, totalBytesWritten, totalBytesExpectedToWrite)
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        progressHandler?(1.0)
+        progressHandler?(1.0, 0, 0)
+        hasStartedProgress = false
     }
 }
 

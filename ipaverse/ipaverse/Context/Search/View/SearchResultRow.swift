@@ -13,96 +13,11 @@ struct SearchResultRow: View {
     let onDownload: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: app.iconURL ?? "")) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } placeholder: {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        Image(systemName: "app.fill")
-                            .foregroundColor(.gray)
-                    )
-            }
-            .frame(width: 50, height: 50)
-            .cornerRadius(8)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(app.name ?? "-")
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Text(app.bundleID ?? "-")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-
-                Text("v\(app.version ?? "-")")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                if let price = app.price, price > 0 {
-                    Text("$\(price, specifier: "%.2f")")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else {
-                    Text("Free")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                }
-            }
-
-            Spacer()
-
-            downloadStateView
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private var downloadStateView: some View {
-        switch downloadState {
-        case .idle:
-            Button(action: onDownload) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundColor(.blue)
-                    .font(.title2)
-            }
-            .buttonStyle(.plain)
-
-        case .purchasing:
-            VStack(spacing: 4) {
-                Text("Purchasing...")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .allowsTightening(true)
-            }
-            .frame(width: 60)
-
-        case .downloading(let progress):
-            VStack(spacing: 4) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.blue.opacity(0.2), lineWidth: 3)
-                        .frame(width: 24, height: 24)
-
-                    Circle()
-                        .trim(from: 0, to: progress)
-                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .frame(width: 24, height: 24)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.2), value: progress)
-                }
-
-                Text("\(Int(progress * 100))%")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .frame(width: 60)
-        }
+        AppRowView(
+            app: app,
+            appRowType: .search(downloadState),
+            onDownload: onDownload,
+            onRedownload: {}
+        )
     }
 }
