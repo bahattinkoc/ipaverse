@@ -14,7 +14,7 @@ protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
     func validateToken(_ token: String) async throws -> Bool
     func logout() async throws
-    func search(term: String, account: Account, limit: Int) async throws -> SearchResult
+    func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
     func purchase(app: AppStoreApp, account: Account) async throws
     func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
 }
@@ -135,9 +135,18 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Search
-    func search(term: String, account: Account, limit: Int = 5) async throws -> SearchResult {
+    func search(term: String, account: Account, limit: Int = 5, platform: AppPlatform) async throws -> SearchResult {
         let countryCode = getCountryCodeFromStoreFront(account.storeFront)
-        let urlString = "https://\(Constant.iTunesAPIDomain)\(Constant.iTunesAPIPathSearch)?entity=software,iPadSoftware&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
+
+        let entity: String
+        switch platform {
+        case .ios:
+            entity = "software,iPadSoftware"
+        case .macos:
+            entity = "macSoftware"
+        }
+
+        let urlString = "https://\(Constant.iTunesAPIDomain)\(Constant.iTunesAPIPathSearch)?entity=\(entity)&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
 
         guard let url = URL(string: urlString) else {
             throw LoginError.networkError
@@ -155,7 +164,23 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.networkError
         }
 
-        let searchResult = try JSONDecoder().decode(SearchResult.self, from: data)
+        var searchResult = try JSONDecoder().decode(SearchResult.self, from: data)
+
+        if let results = searchResult.results {
+            let updatedResults = results.map { app in
+                AppStoreApp(
+                    id: app.id ?? 0,
+                    bundleID: app.bundleID ?? "",
+                    name: app.name ?? "",
+                    version: app.version ?? "",
+                    price: app.price ?? 0.0,
+                    iconURL: app.iconURL,
+                    platform: platform
+                )
+            }
+            searchResult = SearchResult(count: searchResult.count, results: updatedResults)
+        }
+
         return searchResult
     }
 

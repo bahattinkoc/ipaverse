@@ -13,6 +13,7 @@ protocol AppRowData {
     var rowName: String { get }
     var rowVersion: String { get }
     var rowIconURL: String? { get }
+    var rowPlatform: String? { get }
 }
 
 extension AppStoreApp: AppRowData {
@@ -21,6 +22,7 @@ extension AppStoreApp: AppRowData {
     var rowName: String { self.name ?? "" }
     var rowVersion: String { self.version ?? "" }
     var rowIconURL: String? { self.iconURL }
+    var rowPlatform: String? { self.platform?.rawValue }
 }
 
 extension DownloadedApp: AppRowData {
@@ -29,6 +31,7 @@ extension DownloadedApp: AppRowData {
     var rowName: String { self.name }
     var rowVersion: String { self.version }
     var rowIconURL: String? { self.iconURL }
+    var rowPlatform: String? { self.platform }
 }
 
 enum AppRowType {
@@ -83,9 +86,37 @@ struct AppRowView: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
-            Text("v\(app.rowVersion.isEmpty ? "-" : app.rowVersion)")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            HStack(spacing: 4) {
+                Text("v\(app.rowVersion.isEmpty ? "-" : app.rowVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if let platform = app.rowPlatform {
+                    HStack(spacing: 4) {
+                        Image(systemName: platform == "iOS" ? "iphone" : "macbook")
+                            .font(.system(size: 8, weight: .medium))
+
+                        Text(platform)
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(platform == "iOS" ? .blue : .orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(platform == "iOS" ?
+                                  Color.blue.opacity(0.1) :
+                                    Color.orange.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(platform == "iOS" ?
+                                    Color.blue.opacity(0.3) :
+                                        Color.orange.opacity(0.3),
+                                    lineWidth: 0.5)
+                    )
+                }
+            }
 
             switch appRowType {
             case .search:
@@ -156,7 +187,7 @@ struct AppRowView: View {
                         .rotationEffect(.degrees(-90))
                         .animation(.easeInOut(duration: 0.2), value: progress)
                 }
-
+                
                 VStack(spacing: 2) {
                     Text("\(Int(progress * 100))%")
                         .font(.caption2)

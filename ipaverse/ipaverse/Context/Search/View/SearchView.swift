@@ -24,6 +24,8 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 searchBar
 
+                platformSelector
+
                 if !viewModel.searchHistory.isEmpty {
                     recentSearches
                 }
@@ -168,6 +170,65 @@ struct SearchView: View {
                 }
                 .padding(.horizontal)
             }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var platformSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Platform")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    ForEach(AppPlatform.allCases, id: \.self) { platform in
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                viewModel.selectedPlatform = platform
+                                if !viewModel.searchText.isEmpty {
+                                    viewModel.performSearch()
+                                }
+                            }
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: platform == .ios ? "iphone" : "macbook")
+                                    .font(.system(size: 10, weight: .medium))
+
+                                Text(platform.rawValue)
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(viewModel.selectedPlatform == platform ? .white : .primary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(viewModel.selectedPlatform == platform ?
+                                          Color.accentColor :
+                                            Color(NSColor.controlBackgroundColor))
+                                    .shadow(color: viewModel.selectedPlatform == platform ?
+                                            Color.accentColor.opacity(0.2) :
+                                                Color.clear,
+                                            radius: 2, x: 0, y: 1)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(viewModel.selectedPlatform == platform ?
+                                            Color.clear :
+                                                Color(NSColor.separatorColor),
+                                            lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .scaleEffect(viewModel.selectedPlatform == platform ? 1.05 : 1.0)
+                        .animation(.easeInOut(duration: 0.15), value: viewModel.selectedPlatform)
+                    }
+                }
+            }
+            .padding(.horizontal)
         }
         .padding(.bottom, 8)
     }

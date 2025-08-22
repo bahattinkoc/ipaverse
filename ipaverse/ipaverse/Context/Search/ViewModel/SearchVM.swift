@@ -24,6 +24,7 @@ final class SearchVM: ObservableObject {
     @Published var errorMessage: String?
     @Published var showingSavePanel = false
     @Published var downloadState: DownloadState = .idle
+    @Published var selectedPlatform: AppPlatform = .ios
 
     var currentDownloadApp: AppStoreApp?
     private let account: Account
@@ -93,7 +94,8 @@ final class SearchVM: ObservableObject {
                 let result = try await appStoreService.search(
                     term: searchText.trimmingCharacters(in: .whitespacesAndNewlines),
                     account: account,
-                    limit: 5
+                    limit: 5,
+                    platform: selectedPlatform
                 )
 
                 guard let results = result.results else { return }
@@ -162,7 +164,7 @@ final class SearchVM: ObservableObject {
 
     func showSavePanel() {
         guard let app = currentDownloadApp else { return }
-
+        
         let savePanel = NSSavePanel()
         savePanel.title = "Save App File"
 
