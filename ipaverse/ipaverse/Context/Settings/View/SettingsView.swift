@@ -15,13 +15,13 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 32) {
+                VStack(spacing: 20) {
                     downloadSettingsSection
                     searchHistorySection
                     logoutSection
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
             .background(Color(.windowBackgroundColor))
             .navigationTitle("Settings")
@@ -37,10 +37,10 @@ struct SettingsView: View {
     }
 
     private var downloadSettingsSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             sectionHeader(title: "Download Settings")
 
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 downloadPathCard
                 downloadTypeCard
             }
@@ -48,11 +48,11 @@ struct SettingsView: View {
     }
 
     private var downloadPathCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "folder")
                     .foregroundColor(.secondary)
-                    .font(.title3)
+                    .font(.system(.body, design: .default))
 
                 Text("Default Save Path")
                     .font(.system(.body, design: .default, weight: .medium))
@@ -76,24 +76,24 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .background(Color(.controlBackgroundColor))
-                .cornerRadius(10)
+                .cornerRadius(8)
             }
             .buttonStyle(.plain)
         }
-        .padding(20)
+        .padding(16)
         .background(Color(.controlBackgroundColor))
-        .cornerRadius(12)
+        .cornerRadius(10)
     }
 
     private var downloadTypeCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "doc")
                     .foregroundColor(.secondary)
-                    .font(.title3)
+                    .font(.system(.body, design: .default))
 
                 Text("Default Download Type")
                     .font(.system(.body, design: .default, weight: .medium))
@@ -101,7 +101,7 @@ struct SettingsView: View {
                 Spacer()
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(DownloadType.allCases, id: \.self) { type in
                     Button {
                         viewModel.updateDownloadType(type)
@@ -109,28 +109,28 @@ struct SettingsView: View {
                         Text(type.displayName)
                             .font(.system(.subheadline, design: .default, weight: .medium))
                             .foregroundColor(viewModel.settings.defaultDownloadType == type ? .white : .primary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
                             .background(
                                 viewModel.settings.defaultDownloadType == type ?
                                 Color.accentColor : Color(.controlBackgroundColor)
                             )
-                            .cornerRadius(8)
+                            .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
-        .padding(20)
+        .padding(16)
         .background(Color(.controlBackgroundColor))
-        .cornerRadius(12)
+        .cornerRadius(10)
     }
 
     private var searchHistorySection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             sectionHeader(title: "Search History")
 
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 if viewModel.settings.searchHistoryEnabled {
                     clearHistoryCard
                 }
@@ -145,7 +145,7 @@ struct SettingsView: View {
             HStack {
                 Image(systemName: "trash")
                     .foregroundColor(.red)
-                    .font(.title3)
+                    .font(.system(.body, design: .default))
 
                 Text("Clear Search History")
                     .font(.system(.body, design: .default, weight: .medium))
@@ -157,11 +157,11 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.red)
             }
-            .padding(20)
+            .padding(16)
             .background(Color(.controlBackgroundColor))
-            .cornerRadius(12)
+            .cornerRadius(10)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 10)
                     .stroke(Color.red.opacity(0.2), lineWidth: 1)
             )
         }
@@ -169,7 +169,7 @@ struct SettingsView: View {
     }
 
     private var logoutSection: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Button {
                 Task {
                     await loginViewModel.logout()
@@ -177,25 +177,25 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.title3)
+                        .font(.system(.body, design: .default))
 
                     Text("Sign Out")
                         .font(.system(.body, design: .default, weight: .medium))
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                .padding(.vertical, 14)
                 .background(Color.red)
-                .cornerRadius(12)
+                .cornerRadius(10)
             }
             .buttonStyle(.plain)
         }
     }
 
     private func sectionHeader(title: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text(title)
-                .font(.system(.title2, design: .default, weight: .semibold))
+                .font(.system(.title3, design: .default, weight: .semibold))
                 .foregroundColor(.primary)
         }
     }
