@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @MainActor
 final class SettingsVM: ObservableObject {
@@ -48,6 +49,16 @@ final class SettingsVM: ObservableObject {
     func clearSearchHistory() {
         UserDefaults.standard.removeObject(forKey: "SearchHistory")
         NotificationCenter.default.post(name: .searchHistoryCleared, object: nil)
+    }
+
+    func clearAllSwiftData() {
+        do {
+            let context = try ModelContext(ModelContainer(for: DownloadedApp.self))
+            try context.delete(model: DownloadedApp.self)
+            try context.save()
+        } catch {
+            print("SwiftData temizleme hatası: \(error)")
+        }
     }
 
     func selectDownloadPath() {
