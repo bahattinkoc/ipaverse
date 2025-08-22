@@ -29,7 +29,7 @@
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/yourusername/ipaverse.git
+git clone https://github.com/bahattinkoc/ipaverse.git
 cd ipaverse
 open ipaverse.xcodeproj
 ```
