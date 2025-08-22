@@ -15,30 +15,30 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 32) {
                     downloadSettingsSection
                     searchHistorySection
                     logoutSection
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.vertical, 24)
             }
             .background(Color(.windowBackgroundColor))
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    Button("Close") {
+                    Button("Done") {
                         dismiss()
                     }
-                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .font(.system(.body, design: .default, weight: .medium))
                 }
             }
         }
     }
 
     private var downloadSettingsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "Download Settings", icon: "arrow.down.circle.fill", color: .blue)
+        VStack(alignment: .leading, spacing: 20) {
+            sectionHeader(title: "Download Settings")
 
             VStack(spacing: 16) {
                 downloadPathCard
@@ -50,12 +50,12 @@ struct SettingsView: View {
     private var downloadPathCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "folder.fill")
-                    .foregroundColor(.blue)
+                Image(systemName: "folder")
+                    .foregroundColor(.secondary)
                     .font(.title3)
 
                 Text("Default Save Path")
-                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .font(.system(.body, design: .default, weight: .medium))
 
                 Spacer()
             }
@@ -67,7 +67,7 @@ struct SettingsView: View {
                     Text(viewModel.settings.defaultDownloadPath.isEmpty ? "Select Folder" : viewModel.settings.defaultDownloadPath)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .font(.system(.subheadline, design: .rounded))
+                        .font(.system(.subheadline, design: .default))
                         .foregroundColor(viewModel.settings.defaultDownloadPath.isEmpty ? .secondary : .primary)
 
                     Spacer()
@@ -79,25 +79,24 @@ struct SettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(Color(.controlBackgroundColor))
-                .cornerRadius(12)
+                .cornerRadius(10)
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
+        .padding(20)
         .background(Color(.controlBackgroundColor))
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+        .cornerRadius(12)
     }
 
     private var downloadTypeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "doc.fill")
-                    .foregroundColor(.green)
+                Image(systemName: "doc")
+                    .foregroundColor(.secondary)
                     .font(.title3)
 
                 Text("Default Download Type")
-                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .font(.system(.body, design: .default, weight: .medium))
 
                 Spacer()
             }
@@ -108,33 +107,30 @@ struct SettingsView: View {
                         viewModel.updateDownloadType(type)
                     } label: {
                         Text(type.displayName)
-                            .font(.system(.subheadline, design: .rounded, weight: .medium))
+                            .font(.system(.subheadline, design: .default, weight: .medium))
                             .foregroundColor(viewModel.settings.defaultDownloadType == type ? .white : .primary)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
                             .background(
                                 viewModel.settings.defaultDownloadType == type ?
-                                Color.blue : Color(.controlBackgroundColor)
+                                Color.accentColor : Color(.controlBackgroundColor)
                             )
-                            .cornerRadius(10)
+                            .cornerRadius(8)
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
-        .padding(16)
+        .padding(20)
         .background(Color(.controlBackgroundColor))
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+        .cornerRadius(12)
     }
 
     private var searchHistorySection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "Search History", icon: "clock.fill", color: .orange)
+        VStack(alignment: .leading, spacing: 20) {
+            sectionHeader(title: "Search History")
 
             VStack(spacing: 16) {
-                searchHistoryToggleCard
-
                 if viewModel.settings.searchHistoryEnabled {
                     clearHistoryCard
                 }
@@ -142,48 +138,17 @@ struct SettingsView: View {
         }
     }
 
-    private var searchHistoryToggleCard: some View {
-        HStack {
-            HStack(spacing: 12) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundColor(.orange)
-                    .font(.title3)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Save Search History")
-                        .font(.system(.body, design: .rounded, weight: .medium))
-
-                    Text("Keep track of your recent searches")
-                        .font(.system(.caption, design: .rounded))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            Toggle("", isOn: $viewModel.settings.searchHistoryEnabled)
-                .toggleStyle(SwitchToggleStyle(tint: .orange))
-                .onChange(of: viewModel.settings.searchHistoryEnabled) { _, _ in
-                    viewModel.saveSettings()
-                }
-        }
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-    }
-
     private var clearHistoryCard: some View {
         Button {
             viewModel.clearSearchHistory()
         } label: {
             HStack {
-                Image(systemName: "trash.fill")
+                Image(systemName: "trash")
                     .foregroundColor(.red)
                     .font(.title3)
 
                 Text("Clear Search History")
-                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .font(.system(.body, design: .default, weight: .medium))
                     .foregroundColor(.red)
 
                 Spacer()
@@ -192,12 +157,12 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.red)
             }
-            .padding(16)
+            .padding(20)
             .background(Color(.controlBackgroundColor))
-            .cornerRadius(16)
+            .cornerRadius(12)
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.red.opacity(0.2), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -214,34 +179,23 @@ struct SettingsView: View {
                     Image(systemName: "rectangle.portrait.and.arrow.right")
                         .font(.title3)
 
-                    Text("Log out")
-                        .font(.system(.body, design: .rounded, weight: .semibold))
+                    Text("Sign Out")
+                        .font(.system(.body, design: .default, weight: .medium))
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(
-                    LinearGradient(
-                        colors: [.red, .red.opacity(0.8)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(16)
-                .shadow(color: .red.opacity(0.3), radius: 8, x: 0, y: 4)
+                .background(Color.red)
+                .cornerRadius(12)
             }
             .buttonStyle(.plain)
         }
     }
 
-    private func sectionHeader(title: String, icon: String, color: Color) -> some View {
+    private func sectionHeader(title: String) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .font(.title2)
-
             Text(title)
-                .font(.system(.title3, design: .rounded, weight: .bold))
+                .font(.system(.title2, design: .default, weight: .semibold))
                 .foregroundColor(.primary)
         }
     }
