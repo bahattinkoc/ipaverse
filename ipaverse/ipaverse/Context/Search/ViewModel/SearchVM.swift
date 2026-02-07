@@ -52,7 +52,9 @@ final class SearchVM: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.searchHistory = []
+            Task { @MainActor in
+                self?.searchHistory = []
+            }
         }
     }
 

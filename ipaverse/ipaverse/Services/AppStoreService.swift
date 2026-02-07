@@ -301,7 +301,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
 
         if result.success, let modelContext {
-            if let existingApp = await findExistingDownloadedApp(app: app, context: modelContext) {
+            if await findExistingDownloadedApp(app: app, context: modelContext) != nil {
                 await updateDownloadedApp(app: app, newFilePath: result.destinationPath, context: modelContext)
             } else {
                 await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
