@@ -56,7 +56,7 @@ final class SettingsVM: ObservableObject {
             try context.delete(model: DownloadedApp.self)
             try context.save()
         } catch {
-            print("SwiftData temizleme hatası: \(error)")
+            print("SwiftData clearing error: \(error)")
         }
     }
 
