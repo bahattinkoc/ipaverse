@@ -22,6 +22,7 @@ protocol AppStoreServiceProtocol {
 final class AppStoreService: AppStoreServiceProtocol {
     private let session: URLSession
     private let cookieJar: HTTPCookieStorage
+    private let logger = NetworkLogger.shared
 
     let sessionDelegate: AppStoreURLSessionDelegate
 
@@ -52,7 +53,9 @@ final class AppStoreService: AppStoreServiceProtocol {
                 redirectURL: redirect
             )
 
+            logger.logRequest(loginRequest)
             let (data, response) = try await session.data(for: loginRequest)
+            logger.logResponse(response, data: data, error: nil)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw LoginError.networkError
@@ -157,7 +160,9 @@ final class AppStoreService: AppStoreServiceProtocol {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
 
+        logger.logRequest(request)
         let (data, response) = try await session.data(for: request)
+        logger.logResponse(response, data: data, error: nil)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -238,11 +243,15 @@ final class AppStoreService: AppStoreServiceProtocol {
         )
         request.httpBody = plistData
 
+        logger.logRequest(request)
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            logger.logResponse(response, data: data, error: LoginError.networkError)
             throw LoginError.networkError
         }
+
+        logger.logResponse(response, data: data, error: nil)
 
         if httpResponse.statusCode == 500 {
             throw LoginError.unknownError("License already exists")
@@ -341,11 +350,15 @@ final class AppStoreService: AppStoreServiceProtocol {
         )
         request.httpBody = plistData
 
+        logger.logRequest(request)
         let (data, response) = try await session.data(for: request)
 
         guard let _ = response as? HTTPURLResponse else {
+            logger.logResponse(response, data: data, error: LoginError.networkError)
             throw LoginError.networkError
         }
+
+        logger.logResponse(response, data: data, error: nil)
 
         let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
 
@@ -393,11 +406,15 @@ final class AppStoreService: AppStoreServiceProtocol {
         )
         request.httpBody = plistData
 
+        logger.logRequest(request)
         let (data, response) = try await session.data(for: request)
 
         guard let _ = response as? HTTPURLResponse else {
+            logger.logResponse(response, data: data, error: LoginError.networkError)
             throw LoginError.networkError
         }
+
+        logger.logResponse(response, data: data, error: nil)
 
         let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
 
@@ -416,15 +433,14 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         var downloadRequest = URLRequest(url: downloadURL)
+        downloadRequest.httpMethod = "GET"
         downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
-        let downloadTask = session.downloadTask(with: downloadRequest)
-
-        downloadTask.resume()
-
-        let (fileURL, _) = try await session.download(from: downloadURL)
+        logger.logRequest(downloadRequest)
+        let (fileURL, downloadResponse) = try await session.download(from: downloadURL)
+        logger.logResponse(downloadResponse, data: nil, error: nil)
 
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
