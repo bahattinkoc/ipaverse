@@ -49,9 +49,8 @@ final class SettingsVM: ObservableObject {
     func clearSearchHistory() {
         UserDefaults.standard.removeObject(forKey: "SearchHistory")
         NotificationCenter.default.post(name: .searchHistoryCleared, object: nil)
-    }
-
-    func clearAllSwiftData() {
+        
+        // Clear all downloaded apps from SwiftData
         do {
             let context = try ModelContext(ModelContainer(for: DownloadedApp.self))
             try context.delete(model: DownloadedApp.self)

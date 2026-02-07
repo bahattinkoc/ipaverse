@@ -18,7 +18,6 @@ struct SettingsView: View {
                 VStack(spacing: 20) {
                     downloadSettingsSection
                     searchHistorySection
-                    databaseSection
                     logoutSection
                 }
                 .padding(.horizontal, 16)
@@ -191,46 +190,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
-    }
-
-    private var databaseSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "Database")
-
-            VStack(spacing: 12) {
-                clearDatabaseCard
-            }
-        }
-    }
-
-    private var clearDatabaseCard: some View {
-        Button {
-            viewModel.clearAllSwiftData()
-        } label: {
-            HStack {
-                Image(systemName: "trash.circle")
-                    .foregroundColor(.orange)
-                    .font(.system(.body, design: .default))
-
-                Text("Clear All Downloaded Apps")
-                    .font(.system(.body, design: .default, weight: .medium))
-                    .foregroundColor(.orange)
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-            .padding(16)
-            .background(Color(.controlBackgroundColor))
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     private func sectionHeader(title: String) -> some View {
