@@ -12,6 +12,7 @@ struct ModernTextField: View {
     let placeholder: String
     @Binding var text: String
     let icon: String
+    var isValid: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -38,7 +39,7 @@ struct ModernTextField: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    .stroke(isValid ? Color.secondary.opacity(0.3) : Color.red, lineWidth: isValid ? 1 : 2)
             )
         }
     }

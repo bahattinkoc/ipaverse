@@ -117,14 +117,16 @@ struct LoginView: View {
                 title: "Apple ID",
                 placeholder: "Enter your Apple ID or email",
                 text: $viewModel.email,
-                icon: "person.circle.fill"
+                icon: "person.circle.fill",
+                isValid: !viewModel.hasEmailBeenEdited || viewModel.isEmailValid
             )
             .focused($focusedField, equals: .email)
 
             ModernSecureTextField(
                 title: "Password",
                 placeholder: "Enter your password",
-                text: $viewModel.password
+                text: $viewModel.password,
+                isValid: !viewModel.hasPasswordBeenEdited || viewModel.isPasswordValid
             )
             .focused($focusedField, equals: .password)
 
@@ -195,7 +197,7 @@ struct LoginView: View {
                     title: viewModel.showAuthCodeField ? "Verify Code" : "Sign In",
                     isLoading: viewModel.isLoading,
                     isEnabled: Binding(
-                        get: { viewModel.showAuthCodeField ? !viewModel.authCode.isEmpty : (!viewModel.email.isEmpty && !viewModel.password.isEmpty) },
+                        get: { viewModel.isLoginButtonEnabled },
                         set: { _ in }
                     )
                 ) {

@@ -12,6 +12,7 @@ struct ModernSecureTextField: View {
     let placeholder: String
     @Binding var text: String
     @State private var isSecure: Bool = true
+    var isValid: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -55,7 +56,7 @@ struct ModernSecureTextField: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    .stroke(isValid ? Color.secondary.opacity(0.3) : Color.red, lineWidth: isValid ? 1 : 2)
             )
         }
     }
