@@ -550,10 +550,6 @@ final class AppStoreService: AppStoreServiceProtocol {
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
 
-        if let progress {
-            sessionDelegate.progressHandler = progress
-        }
-
         var downloadRequest = URLRequest(url: downloadURL)
         downloadRequest.httpMethod = "GET"
         downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
@@ -561,13 +557,58 @@ final class AppStoreService: AppStoreServiceProtocol {
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
         logger.logRequest(downloadRequest)
-        let (fileURL, downloadResponse) = try await session.download(from: downloadURL)
-        logger.logResponse(downloadResponse, data: nil, error: nil)
-
+        
+        // Use bytes(from:) to track progress manually
+        let (asyncBytes, response) = try await session.bytes(for: downloadRequest)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+        
+        let totalBytes = Int64(httpResponse.value(forHTTPHeaderField: "Content-Length") ?? "0") ?? 0
+        
+        // Create file handle for writing
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
         }
-        try FileManager.default.moveItem(at: fileURL, to: destinationURL)
+        FileManager.default.createFile(atPath: destinationURL.path, contents: nil, attributes: nil)
+        
+        guard let fileHandle = FileHandle(forWritingAtPath: destinationURL.path) else {
+            throw LoginError.unknownError("Cannot create file")
+        }
+        
+        defer {
+            try? fileHandle.close()
+        }
+        
+        var downloadedBytes: Int64 = 0
+        
+        // Report initial progress
+        if let progress = progress {
+            progress(0.0, 0, totalBytes)
+        }
+        
+        // Stream bytes and track progress
+        for try await byte in asyncBytes {
+            try fileHandle.write(contentsOf: [byte])
+            downloadedBytes += 1
+            
+            // Report progress every 64KB or on completion
+            if downloadedBytes % 65536 == 0 || downloadedBytes == totalBytes {
+                let currentProgress = totalBytes > 0 ? Double(downloadedBytes) / Double(totalBytes) : 0
+                if let progress = progress {
+                    progress(currentProgress, downloadedBytes, totalBytes)
+                }
+            }
+        }
+        
+        // Ensure final progress is reported
+        if let progress = progress {
+            progress(1.0, downloadedBytes, totalBytes)
+        }
+        
+        logger.logResponse(response, data: nil, error: nil)
 
         return DownloadOutput(
             destinationPath: destinationPath,
