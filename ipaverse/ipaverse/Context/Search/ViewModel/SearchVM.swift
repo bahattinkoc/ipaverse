@@ -10,7 +10,6 @@ import SwiftData
 
 enum DownloadState {
     case idle
-    case purchasing
     case downloading(progress: Double, bytesWritten: Int64, totalBytes: Int64)
 }
 
@@ -133,7 +132,8 @@ final class SearchVM: ObservableObject {
     func startDownload(at url: URL) {
         guard let app = currentDownloadApp else { return }
 
-        downloadState = .purchasing
+        // Start with downloading state (0%) instead of purchasing
+        downloadState = .downloading(progress: 0, bytesWritten: 0, totalBytes: 0)
 
         Task {
             do {
@@ -153,13 +153,16 @@ final class SearchVM: ObservableObject {
                     },
                     modelContext: modelContext
                 )
+                
+                // Download completed successfully
+                self.downloadState = .idle
             } catch {
                 if let loginError = error as? LoginError, loginError == .tokenExpired {
                     await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
                 } else {
                     errorMessage = "Download failed: \(error.localizedDescription)"
-                    downloadState = .idle
                 }
+                downloadState = .idle
             }
         }
     }

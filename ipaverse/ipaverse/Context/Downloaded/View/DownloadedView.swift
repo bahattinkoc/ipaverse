@@ -98,7 +98,7 @@ struct DownloadedView: View {
         let appId = downloadedApp.id
         
         Task { @MainActor in
-            downloadStates[appId] = .purchasing
+            downloadStates[appId] = .downloading(progress: 0, bytesWritten: 0, totalBytes: 0)
         }
         
         Task {
