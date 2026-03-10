@@ -162,17 +162,6 @@ struct AppRowView: View {
             }
             .buttonStyle(.plain)
 
-        case .purchasing:
-            VStack(spacing: 4) {
-                Text("Purchasing...")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .allowsTightening(true)
-            }
-            .frame(width: 60)
-
         case .downloading(let progress, let bytesWritten, let totalBytes):
             VStack(spacing: 4) {
                 ZStack {

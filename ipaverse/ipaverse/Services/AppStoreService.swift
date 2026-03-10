@@ -41,53 +41,175 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Login
     func login(credentials: LoginCredentials) async throws -> Account {
         let deviceID = try await getDeviceIdentifier()
-        var redirect = ""
-        var attempt = 1
-        let maxAttempts = 4
-
-        while attempt <= maxAttempts {
-            let loginRequest = try createLoginRequest(
-                credentials: credentials,
-                deviceID: deviceID,
-                attempt: attempt,
-                redirectURL: redirect
-            )
-
-            logger.logRequest(loginRequest)
-            let (data, response) = try await session.data(for: loginRequest)
-            logger.logResponse(response, data: data, error: nil)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw LoginError.networkError
-            }
-
-            let parseResult = try parseLoginResponse(
-                data: data,
-                statusCode: httpResponse.statusCode,
-                attempt: attempt,
-                authCode: credentials.authCode,
-                httpResponse: httpResponse
-            )
-
-            if parseResult.shouldRetry {
-                redirect = parseResult.redirectURL ?? ""
-                attempt += 1
-                continue
-            }
-
-            let account = Account(
-                email: credentials.email,
-                password: credentials.password,
-                name: parseResult.accountName ?? "",
-                storeFront: parseResult.storeFront ?? "",
-                passwordToken: parseResult.passwordToken ?? "",
-                directoryServicesID: parseResult.directoryServicesID ?? ""
-            )
-
-            return account
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+        
+        // Step 1: Get bag.xml to initialize session
+        let _ = try await fetchBagXML(guid: guid)
+        
+        // Step 2: Authenticate using auth.itunes.apple.com
+        let loginRequest = try createAuthLoginRequest(
+            credentials: credentials,
+            guid: guid
+        )
+        
+        logger.logRequest(loginRequest)
+        let (data, response) = try await session.data(for: loginRequest)
+        logger.logResponse(response, data: data, error: nil)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LoginError.networkError
         }
-
-        throw LoginError.unknownError("Too many attempts were made.")
+        
+        let parseResult = try parseAuthLoginResponse(
+            data: data,
+            statusCode: httpResponse.statusCode,
+            httpResponse: httpResponse,
+            credentials: credentials
+        )
+        
+        let account = Account(
+            email: credentials.email,
+            password: credentials.password,
+            name: parseResult.accountName ?? "",
+            storeFront: parseResult.storeFront ?? "143480",
+            passwordToken: parseResult.passwordToken ?? "",
+            directoryServicesID: parseResult.directoryServicesID ?? ""
+        )
+        
+        return account
+    }
+    
+    private func fetchBagXML(guid: String) async throws -> Data {
+        let urlString = "https://init.itunes.apple.com/bag.xml?guid=\(guid)"
+        
+        guard let url = URL(string: urlString) else {
+            throw LoginError.networkError
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/xml", forHTTPHeaderField: "Accept")
+        request.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        
+        logger.logRequest(request)
+        let (data, response) = try await session.data(for: request)
+        logger.logResponse(response, data: data, error: nil)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+        
+        return data
+    }
+    
+    private func createAuthLoginRequest(credentials: LoginCredentials, guid: String) throws -> URLRequest {
+        let url = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast")!
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        
+        let plistPayload = try createAuthPlistPayload(
+            credentials: credentials,
+            guid: guid
+        )
+        
+        request.httpBody = plistPayload
+        return request
+    }
+    
+    private func createAuthPlistPayload(credentials: LoginCredentials, guid: String) throws -> Data {
+        let payloadDict: [String: Any] = [
+            "appleId": credentials.email,
+            "attempt": "1",
+            "guid": guid,
+            "password": credentials.password + (credentials.authCode ?? "").replacingOccurrences(of: " ", with: ""),
+            "rmp": "0",
+            "why": "signIn"
+        ]
+        
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: payloadDict,
+            format: .xml,
+            options: 0
+        )
+        return plistData
+    }
+    
+    private func parseAuthLoginResponse(data: Data, statusCode: Int, httpResponse: HTTPURLResponse, credentials: LoginCredentials) throws -> LoginParseResult {
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            throw LoginError.networkError
+        }
+        
+        // Handle status codes
+        if let status = plist["status"] as? Int {
+            // Status -128 is "dialog" - needs store switch confirmation but login succeeded
+            // Status 0 is success
+            if status != 0 && status != -128 {
+                // Check for failure type
+                if let failureType = plist["failureType"] as? String {
+                    if failureType == Constant.failureTypeInvalidCredentials {
+                        throw LoginError.invalidCredentials
+                    }
+                }
+                
+                // Check for customer message
+                if let customerMessage = plist["customerMessage"] as? String {
+                    if customerMessage == Constant.customerMessageAccountDisabled {
+                        throw LoginError.accountLocked
+                    }
+                    if customerMessage.contains("BadLogin") && credentials.authCode == nil {
+                        throw LoginError.twoFactorRequired
+                    }
+                    throw LoginError.unknownError(customerMessage)
+                }
+                
+                throw LoginError.unknownError("Login failed with status \(status)")
+            }
+        }
+        
+        // Check for password token - required for authenticated requests
+        guard let passwordToken = plist["passwordToken"] as? String, !passwordToken.isEmpty else {
+            // Check if 2FA is required
+            if let customerMessage = plist["customerMessage"] as? String,
+               customerMessage.contains("BadLogin") && credentials.authCode == nil {
+                throw LoginError.twoFactorRequired
+            }
+            throw LoginError.networkError
+        }
+        
+        guard let directoryServicesID = plist["dsPersonId"] as? String ?? plist["dsid"] as? String, !directoryServicesID.isEmpty else {
+            throw LoginError.networkError
+        }
+        
+        // Extract account name
+        var accountName = ""
+        if let accountInfo = plist["accountInfo"] as? [String: Any],
+           let address = accountInfo["address"] as? [String: Any] {
+            let firstName = address["firstName"] as? String ?? ""
+            let lastName = address["lastName"] as? String ?? ""
+            accountName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+        }
+        
+        // Get storefront from response headers or dsid prefix
+        var storeFront = httpResponse.value(forHTTPHeaderField: Constant.httpHeaderStoreFront) ?? "143480"
+        
+        // If no header, try to extract from dsid
+        if storeFront.isEmpty, let dsid = plist["dsid"] as? Int {
+            storeFront = String(dsid)
+        }
+        
+        return LoginParseResult(
+            shouldRetry: false,
+            accountName: accountName.isEmpty ? credentials.email : accountName,
+            storeFront: storeFront,
+            passwordToken: passwordToken,
+            directoryServicesID: directoryServicesID
+        )
     }
 
     // MARK: - Token Validation
@@ -428,10 +550,6 @@ final class AppStoreService: AppStoreServiceProtocol {
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
 
-        if let progress {
-            sessionDelegate.progressHandler = progress
-        }
-
         var downloadRequest = URLRequest(url: downloadURL)
         downloadRequest.httpMethod = "GET"
         downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
@@ -439,13 +557,58 @@ final class AppStoreService: AppStoreServiceProtocol {
         downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
         logger.logRequest(downloadRequest)
-        let (fileURL, downloadResponse) = try await session.download(from: downloadURL)
-        logger.logResponse(downloadResponse, data: nil, error: nil)
-
+        
+        // Use bytes(from:) to track progress manually
+        let (asyncBytes, downloadResponse) = try await session.bytes(for: downloadRequest)
+        
+        guard let httpResponse = downloadResponse as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+        
+        let totalBytes = Int64(httpResponse.value(forHTTPHeaderField: "Content-Length") ?? "0") ?? 0
+        
+        // Create file handle for writing
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
         }
-        try FileManager.default.moveItem(at: fileURL, to: destinationURL)
+        FileManager.default.createFile(atPath: destinationURL.path, contents: nil, attributes: nil)
+        
+        guard let fileHandle = FileHandle(forWritingAtPath: destinationURL.path) else {
+            throw LoginError.unknownError("Cannot create file")
+        }
+        
+        defer {
+            try? fileHandle.close()
+        }
+        
+        var downloadedBytes: Int64 = 0
+        
+        // Report initial progress
+        if let progress = progress {
+            progress(0.0, 0, totalBytes)
+        }
+        
+        // Stream bytes and track progress
+        for try await byte in asyncBytes {
+            try fileHandle.write(contentsOf: [byte])
+            downloadedBytes += 1
+            
+            // Report progress every 64KB or on completion
+            if downloadedBytes % 65536 == 0 || downloadedBytes == totalBytes {
+                let currentProgress = totalBytes > 0 ? Double(downloadedBytes) / Double(totalBytes) : 0
+                if let progress = progress {
+                    progress(currentProgress, downloadedBytes, totalBytes)
+                }
+            }
+        }
+        
+        // Ensure final progress is reported
+        if let progress = progress {
+            progress(1.0, downloadedBytes, totalBytes)
+        }
+        
+        logger.logResponse(downloadResponse, data: nil, error: nil)
 
         return DownloadOutput(
             destinationPath: destinationPath,
