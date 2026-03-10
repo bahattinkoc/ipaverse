@@ -559,9 +559,9 @@ final class AppStoreService: AppStoreServiceProtocol {
         logger.logRequest(downloadRequest)
         
         // Use bytes(from:) to track progress manually
-        let (asyncBytes, response) = try await session.bytes(for: downloadRequest)
+        let (asyncBytes, downloadResponse) = try await session.bytes(for: downloadRequest)
         
-        guard let httpResponse = response as? HTTPURLResponse,
+        guard let httpResponse = downloadResponse as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw LoginError.networkError
         }
@@ -608,7 +608,7 @@ final class AppStoreService: AppStoreServiceProtocol {
             progress(1.0, downloadedBytes, totalBytes)
         }
         
-        logger.logResponse(response, data: nil, error: nil)
+        logger.logResponse(downloadResponse, data: nil, error: nil)
 
         return DownloadOutput(
             destinationPath: destinationPath,
