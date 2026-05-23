@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import Network
 import SwiftData
+import IOKit
 
 protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
@@ -41,16 +42,18 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Login
     func login(credentials: LoginCredentials) async throws -> Account {
         let deviceID = try await getDeviceIdentifier()
+        let bag = try await fetchBag(deviceID: deviceID)
         var redirect = ""
         var attempt = 1
         let maxAttempts = 4
 
         while attempt <= maxAttempts {
+            let urlString = redirect.isEmpty ? bag : redirect
             let loginRequest = try createLoginRequest(
                 credentials: credentials,
                 deviceID: deviceID,
                 attempt: attempt,
-                redirectURL: redirect
+                url: urlString
             )
 
             logger.logRequest(loginRequest)
@@ -81,13 +84,47 @@ final class AppStoreService: AppStoreServiceProtocol {
                 name: parseResult.accountName ?? "",
                 storeFront: parseResult.storeFront ?? "",
                 passwordToken: parseResult.passwordToken ?? "",
-                directoryServicesID: parseResult.directoryServicesID ?? ""
+                directoryServicesID: parseResult.directoryServicesID ?? "",
+                pod: parseResult.pod
             )
 
             return account
         }
 
         throw LoginError.unknownError("Too many attempts were made.")
+    }
+
+    private func fetchBag(deviceID: String) async throws -> String {
+        let urlString = "https://\(Constant.privateInitDomain)\(Constant.privateInitPath)?guid=\(deviceID)"
+        guard let url = URL(string: urlString) else {
+            throw LoginError.networkError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/xml", forHTTPHeaderField: "Accept")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+
+        logger.logRequest(request)
+        let (data, response) = try await session.data(for: request)
+        logger.logResponse(response, data: data, error: nil)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+
+        let normalizedData = normalizePlistData(data)
+        guard let plist = try? PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any] else {
+            throw LoginError.unknownError("Failed to parse bag response")
+        }
+
+        guard let urlBag = plist["urlBag"] as? [String: Any],
+              let authenticateAccount = urlBag["authenticateAccount"] as? String else {
+            throw LoginError.unknownError("Bag response missing authentication endpoint")
+        }
+
+        return authenticateAccount
     }
 
     // MARK: - Token Validation
@@ -210,7 +247,8 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     private func purchaseWithParams(account: Account, app: AppStoreApp, guid: String, pricingParameters: String) async throws {
-        let url = URL(string: "https://\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathPurchase)")!
+        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
+        let url = URL(string: "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathPurchase)")!
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -257,7 +295,8 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.unknownError("License already exists")
         }
 
-        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        let normalizedData = normalizePlistData(data)
+        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
             if failureType == Constant.failureTypePasswordTokenExpired {
@@ -324,7 +363,8 @@ final class AppStoreService: AppStoreServiceProtocol {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
-        let downloadURL = "https://\(Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
+        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
+        let downloadURL = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
 
         guard let url = URL(string: downloadURL) else {
             throw LoginError.networkError
@@ -360,7 +400,8 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         logger.logResponse(response, data: data, error: nil)
 
-        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        let normalizedData = normalizePlistData(data)
+        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
             if failureType == Constant.failureTypePasswordTokenExpired {
@@ -380,7 +421,8 @@ final class AppStoreService: AppStoreServiceProtocol {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
-        let downloadURL = "https://\(Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
+        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
+        let downloadURL = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
 
         guard let url = URL(string: downloadURL) else {
             throw LoginError.networkError
@@ -416,7 +458,8 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         logger.logResponse(response, data: data, error: nil)
 
-        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        let normalizedData = normalizePlistData(data)
+        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
 
         guard let items = plist?["songList"] as? [[String: Any]],
               let firstItem = items.first,
@@ -427,25 +470,14 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
-
-        if let progress {
-            sessionDelegate.progressHandler = progress
-        }
-
-        var downloadRequest = URLRequest(url: downloadURL)
-        downloadRequest.httpMethod = "GET"
-        downloadRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        downloadRequest.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
-
-        logger.logRequest(downloadRequest)
-        let (fileURL, downloadResponse) = try await session.download(from: downloadURL)
+        let downloadResponse = try await streamDownloadFile(
+            from: downloadURL,
+            to: destinationURL,
+            userAgent: Constant.defaultUserAgent,
+            dsid: account.directoryServicesID,
+            progress: progress
+        )
         logger.logResponse(downloadResponse, data: nil, error: nil)
-
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-        try FileManager.default.moveItem(at: fileURL, to: destinationURL)
 
         return DownloadOutput(
             destinationPath: destinationPath,
@@ -454,56 +486,108 @@ final class AppStoreService: AppStoreServiceProtocol {
         )
     }
 
-    // MARK: - Private Methods
-
-    private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, redirectURL: String) throws -> URLRequest {
-        var baseURL: String
-
-        switch attempt {
-        case 1:
-            baseURL = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
-        case 2:
-            baseURL = "https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
-        case 3:
-            baseURL = "https://p71-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
-        case 4:
-            baseURL = "https://idmsa.apple.com/appleauth/auth/signin"
-        default:
-            baseURL = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
+    private func streamDownloadFile(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        userAgent: String,
+        dsid: String,
+        progress: ((Double, Int64, Int64) -> Void)?
+    ) async throws -> URLResponse {
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
         }
 
-        let urlString = redirectURL.isEmpty ? baseURL : redirectURL
+        let tempURL = destinationURL.deletingLastPathComponent()
+            .appendingPathComponent("\(UUID().uuidString).part")
 
+        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        let fileHandle = try FileHandle(forWritingTo: tempURL)
+
+        defer {
+            try? fileHandle.close()
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+        }
+
+        var request = URLRequest(url: sourceURL)
+        request.httpMethod = "GET"
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(dsid, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(dsid, forHTTPHeaderField: "X-Dsid")
+
+        logger.logRequest(request)
+
+        let (bytes, response) = try await session.bytes(for: request)
+
+        let totalBytes = max(response.expectedContentLength, 0)
+        var downloadedBytes: Int64 = 0
+
+        // 64 KB buffer
+        let bufferSize = 64 * 1024
+        var buffer = Data()
+        buffer.reserveCapacity(bufferSize)
+
+        // UI update throttle (her 100ms)
+        var lastProgressUpdate = Date.distantPast
+        let minUpdateInterval: TimeInterval = 0.1
+
+        if totalBytes > 0 {
+            progress?(0, 0, totalBytes)
+        }
+
+        for try await byte in bytes {
+            buffer.append(byte)
+
+            if buffer.count >= bufferSize {
+                try fileHandle.write(contentsOf: buffer)
+                downloadedBytes += Int64(buffer.count)
+                buffer.removeAll(keepingCapacity: true)
+
+                let now = Date()
+                if now.timeIntervalSince(lastProgressUpdate) >= minUpdateInterval {
+                    if totalBytes > 0 {
+                        let ratio = min(Double(downloadedBytes) / Double(totalBytes), 1.0)
+                        progress?(ratio, downloadedBytes, totalBytes)
+                    } else {
+                        progress?(0, downloadedBytes, 0)
+                    }
+                    lastProgressUpdate = now
+                }
+            }
+        }
+
+        // Kalan buffer'ı yaz
+        if !buffer.isEmpty {
+            try fileHandle.write(contentsOf: buffer)
+            downloadedBytes += Int64(buffer.count)
+        }
+
+        // Final progress
+        if totalBytes > 0 {
+            progress?(1.0, downloadedBytes, totalBytes)
+        } else {
+            progress?(0, downloadedBytes, 0)
+        }
+
+        try fileHandle.close()
+        try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+
+        return response
+    }
+
+    // MARK: - Private Methods
+
+    private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, url urlString: String) throws -> URLRequest {
         guard let url = URL(string: urlString) else {
             throw LoginError.networkError
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-
         request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let payload: Data
-        switch attempt {
-        case 1, 2:
-            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            payload = try createPlistPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-        case 3:
-            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            payload = createURLEncodedPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-        case 4:
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            payload = try createJSONPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-        default:
-            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            payload = try createPlistPayload(credentials: credentials, deviceID: deviceID, attempt: attempt)
-        }
-
-        request.httpBody = payload
-        return request
-    }
-
-    private func createPlistPayload(credentials: LoginCredentials, deviceID: String, attempt: Int) throws -> Data {
         let payloadDict: [String: Any] = [
             "appleId": credentials.email,
             "attempt": String(attempt),
@@ -519,40 +603,12 @@ final class AppStoreService: AppStoreServiceProtocol {
                 format: .xml,
                 options: 0
             )
-            return plistData
+            request.httpBody = plistData
         } catch {
             throw LoginError.networkError
         }
-    }
 
-    private func createURLEncodedPayload(credentials: LoginCredentials, deviceID: String, attempt: Int) -> Data {
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "appleId", value: credentials.email),
-            URLQueryItem(name: "attempt", value: String(attempt)),
-            URLQueryItem(name: "guid", value: deviceID),
-            URLQueryItem(name: "password", value: credentials.password + (credentials.authCode ?? "").replacingOccurrences(of: " ", with: "")),
-            URLQueryItem(name: "rmp", value: "0"),
-            URLQueryItem(name: "why", value: "signIn")
-        ]
-
-        return components.query?.data(using: .utf8) ?? Data()
-    }
-
-    private func createJSONPayload(credentials: LoginCredentials, deviceID: String, attempt: Int) throws -> Data {
-        let payloadDict: [String: Any] = [
-            "accountName": credentials.email,
-            "password": credentials.password + (credentials.authCode ?? "").replacingOccurrences(of: " ", with: ""),
-            "rememberMe": credentials.rememberMe,
-            "trustTokens": []
-        ]
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: payloadDict, options: [])
-            return jsonData
-        } catch {
-            throw LoginError.networkError
-        }
+        return request
     }
 
     private func parseLoginResponse(data: Data, statusCode: Int, attempt: Int, authCode: String?, httpResponse: HTTPURLResponse) throws -> LoginParseResult {
@@ -571,7 +627,8 @@ final class AppStoreService: AppStoreServiceProtocol {
             }
         }
 
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+        let normalizedData = normalizePlistData(data)
+        guard let plist = try? PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any] else {
             throw LoginError.networkError
         }
 
@@ -614,20 +671,42 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         let accountName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
         let storeFront = httpResponse.value(forHTTPHeaderField: Constant.httpHeaderStoreFront) ?? "143441"
+        let pod = httpResponse.value(forHTTPHeaderField: Constant.httpHeaderPod)
 
         return LoginParseResult(
             shouldRetry: false,
             accountName: accountName,
             storeFront: storeFront,
             passwordToken: passwordToken,
-            directoryServicesID: directoryServicesID
+            directoryServicesID: directoryServicesID,
+            pod: pod
         )
+    }
+
+    private func normalizePlistData(_ data: Data) -> Data {
+        guard let string = String(data: data, encoding: .utf8) else { return data }
+
+        // Try to extract <plist>...</plist>
+        if let range = string.range(of: "<plist", options: .caseInsensitive),
+           let endRange = string.range(of: "</plist>", options: .caseInsensitive) {
+            let plistString = string[range.lowerBound..<endRange.upperBound]
+            return plistString.data(using: .utf8) ?? data
+        }
+
+        // Try to extract <dict>...</dict> if it's not a full plist
+        if let range = string.range(of: "<dict", options: .caseInsensitive),
+           let endRange = string.range(of: "</dict>", options: .caseInsensitive) {
+            let dictString = string[range.lowerBound..<endRange.upperBound]
+            let fullPlist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n\(dictString)\n</plist>"
+            return fullPlist.data(using: .utf8) ?? data
+        }
+
+        return data
     }
 
     private func getDeviceIdentifier() async throws -> String {
         let task = Process()
         task.launchPath = "/sbin/ifconfig"
-        task.arguments = ["en0", "ether"]
 
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -639,9 +718,19 @@ final class AppStoreService: AppStoreServiceProtocol {
         let output = String(data: data, encoding: .utf8) ?? ""
 
         let lines = output.components(separatedBy: .newlines)
+        var currentInterface = ""
+        let virtualPrefixes = ["lo", "utun", "bridge", "vmnet", "vlan", "gif", "stf", "awdl", "llw", "anpi"]
+
         for line in lines {
+            if !line.hasPrefix("\t") && line.contains(":") {
+                currentInterface = line.components(separatedBy: ":").first ?? ""
+            }
+
+            let isVirtual = virtualPrefixes.contains(where: { currentInterface.hasPrefix($0) })
+            guard !isVirtual else { continue }
+
             if line.contains("ether") {
-                let components = line.components(separatedBy: " ")
+                let components = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " ")
                 for component in components {
                     if component.contains(":") && component.count == 17 {
                         return component.replacingOccurrences(of: ":", with: "").uppercased()
@@ -650,7 +739,24 @@ final class AppStoreService: AppStoreServiceProtocol {
             }
         }
 
+        // Fallback to a stable identifier if mac address is not found
+        if let serialNumber = getSerialNumber() {
+            return serialNumber.replacingOccurrences(of: "-", with: "").uppercased()
+        }
+
         return UUID().uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+    }
+
+    private func getSerialNumber() -> String? {
+        let platformExpert = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        if platformExpert > 0 {
+            if let serialNumber = IORegistryEntryCreateCFProperty(platformExpert, kIOPlatformSerialNumberKey as CFString, kCFAllocatorDefault, 0).takeRetainedValue() as? String {
+                IOObjectRelease(platformExpert)
+                return serialNumber
+            }
+            IOObjectRelease(platformExpert)
+        }
+        return nil
     }
 
     private func getCountryCodeFromStoreFront(_ storeFront: String) -> String {
@@ -752,6 +858,7 @@ struct LoginParseResult {
     let storeFront: String?
     let passwordToken: String?
     let directoryServicesID: String?
+    let pod: String?
 
     init(
         shouldRetry: Bool,
@@ -759,7 +866,8 @@ struct LoginParseResult {
         accountName: String? = nil,
         storeFront: String? = nil,
         passwordToken: String? = nil,
-        directoryServicesID: String? = nil
+        directoryServicesID: String? = nil,
+        pod: String? = nil
     ) {
         self.shouldRetry = shouldRetry
         self.redirectURL = redirectURL
@@ -767,6 +875,7 @@ struct LoginParseResult {
         self.storeFront = storeFront
         self.passwordToken = passwordToken
         self.directoryServicesID = directoryServicesID
+        self.pod = pod
     }
 }
 
@@ -831,6 +940,10 @@ private extension AppStoreService {
         static let privateAppStoreAPIPathDownload = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
 
         static let httpHeaderStoreFront = "X-Set-Apple-Store-Front"
+        static let httpHeaderPod = "pod"
+
+        static let privateInitDomain = "init." + iTunesAPIDomain
+        static let privateInitPath = "/bag.xml"
 
         static let pricingParameterAppStore = "STDQ"
         static let pricingParameterAppleArcade = "GAME"

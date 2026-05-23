@@ -34,6 +34,7 @@ struct Account: Codable, Equatable {
     let passwordToken: String
     let directoryServicesID: String
     let password: String
+    let pod: String?
     
     init(
         email: String,
@@ -41,7 +42,8 @@ struct Account: Codable, Equatable {
         name: String,
         storeFront: String,
         passwordToken: String,
-        directoryServicesID: String
+        directoryServicesID: String,
+        pod: String? = nil
     ) {
         self.email = email
         self.password = password
@@ -49,6 +51,7 @@ struct Account: Codable, Equatable {
         self.storeFront = storeFront
         self.passwordToken = passwordToken
         self.directoryServicesID = directoryServicesID
+        self.pod = pod
     }
 }
 

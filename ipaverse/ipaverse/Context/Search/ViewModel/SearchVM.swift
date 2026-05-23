@@ -138,27 +138,33 @@ final class SearchVM: ObservableObject {
         Task {
             do {
                 let appStoreService = AppStoreService()
+                
+                // Purchase logic will happen inside download if needed
+                // But we can trigger an explicit state update here to transition UI
+                
                 let _ = try await appStoreService.download(
                     app: app,
                     account: account,
                     outputPath: url.path,
                     progress: { progress, bytesWritten, totalBytes in
                         Task { @MainActor in
-                            if progress >= 1.0 {
-                                self.downloadState = .idle
-                            } else {
-                                self.downloadState = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
-                            }
+                            self.downloadState = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
                         }
                     },
                     modelContext: modelContext
                 )
+                
+                Task { @MainActor in
+                    self.downloadState = .idle
+                }
             } catch {
-                if let loginError = error as? LoginError, loginError == .tokenExpired {
-                    await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
-                } else {
-                    errorMessage = "Download failed: \(error.localizedDescription)"
-                    downloadState = .idle
+                Task { @MainActor in
+                    if let loginError = error as? LoginError, loginError == .tokenExpired {
+                        await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
+                    } else {
+                        errorMessage = "Download failed: \(error.localizedDescription)"
+                        downloadState = .idle
+                    }
                 }
             }
         }
