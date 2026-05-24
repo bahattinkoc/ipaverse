@@ -477,6 +477,22 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.unknownError("Invalid download response")
         }
 
+        let sinfsRaw = firstItem["sinfs"] as? [Any] ?? []
+        print("🔐 [IPAPatcher] sinfs in API response: \(sinfsRaw.count)")
+        let sinfs: [SinfData] = sinfsRaw.compactMap { item in
+            guard let dict = item as? [String: Any],
+                  let rawData = dict["sinf"] as? Data else {
+                print("🔐 [IPAPatcher] sinf item skipped — unexpected format: \(item)")
+                return nil
+            }
+            let id: Int64
+            if let n = dict["id"] as? Int64 { id = n }
+            else if let n = dict["id"] as? Int { id = Int64(n) }
+            else { id = 0 }
+            return SinfData(id: id, data: rawData)
+        }
+        print("🔐 [IPAPatcher] parsed sinfs: \(sinfs.count)")
+
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
         let destinationURL = URL(fileURLWithPath: destinationPath)
         let downloadResponse = try await streamDownloadFile(
@@ -487,6 +503,16 @@ final class AppStoreService: AppStoreServiceProtocol {
             progress: progress
         )
         logger.logResponse(downloadResponse, data: nil, error: nil)
+
+        do {
+            try IPAPatcher().applyPatches(
+                ipaPath: destinationPath,
+                sinfs: sinfs,
+                email: account.email
+            )
+        } catch {
+            print("🔐 [IPAPatcher] patching error (download kept): \(error.localizedDescription)")
+        }
 
         return DownloadOutput(
             destinationPath: destinationPath,
