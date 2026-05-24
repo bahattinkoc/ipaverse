@@ -22,11 +22,9 @@ final class SearchVM: ObservableObject {
     @Published var isLoading = false
     @Published var isSearching = false
     @Published var errorMessage: String?
-    @Published var showingSavePanel = false
-    @Published var downloadState: DownloadState = .idle
     @Published var selectedPlatform: AppPlatform = .ios
+    @Published var selectedDetailApp: AppStoreApp?
 
-    var currentDownloadApp: AppStoreApp?
     private let account: Account
     private var modelContext: ModelContext?
     private var loginViewModel: LoginVM?
@@ -126,78 +124,7 @@ final class SearchVM: ObservableObject {
     }
 
     func downloadApp(_ app: AppStoreApp) {
-        currentDownloadApp = app
-        showingSavePanel = true
-    }
-
-    func startDownload(at url: URL) {
-        guard let app = currentDownloadApp else { return }
-
-        downloadState = .purchasing
-
-        Task {
-            do {
-                let appStoreService = AppStoreService()
-                
-                // Purchase logic will happen inside download if needed
-                // But we can trigger an explicit state update here to transition UI
-                
-                let _ = try await appStoreService.download(
-                    app: app,
-                    account: account,
-                    outputPath: url.path,
-                    progress: { progress, bytesWritten, totalBytes in
-                        Task { @MainActor in
-                            self.downloadState = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
-                        }
-                    },
-                    modelContext: modelContext
-                )
-                
-                Task { @MainActor in
-                    self.downloadState = .idle
-                }
-            } catch {
-                Task { @MainActor in
-                    if let loginError = error as? LoginError, loginError == .tokenExpired {
-                        await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
-                    } else {
-                        errorMessage = "Download failed: \(error.localizedDescription)"
-                        downloadState = .idle
-                    }
-                }
-            }
-        }
-    }
-
-    func showSavePanel() {
-        guard let app = currentDownloadApp else { return }
-        
-        let savePanel = NSSavePanel()
-        savePanel.title = "Save App File"
-
-        let downloadType = getDownloadTypeFromSettings()
-        let fileExtension = downloadType.rawValue
-        let fileName = "\(app.bundleID ?? "")_\(app.version ?? "").\(fileExtension)"
-
-        savePanel.nameFieldStringValue = fileName
-        savePanel.allowedContentTypes = [.init(filenameExtension: fileExtension)!]
-        savePanel.canCreateDirectories = true
-
-        savePanel.begin { [weak self] response in
-            if response == .OK, let url = savePanel.url {
-                self?.startDownload(at: url)
-            }
-            self?.showingSavePanel = false
-        }
-    }
-
-    private func getDownloadTypeFromSettings() -> DownloadType {
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data) {
-            return settings.defaultDownloadType
-        }
-        return .ipa
+        selectedDetailApp = app
     }
 
     func refreshSearchHistory() {

@@ -17,7 +17,8 @@ protocol AppStoreServiceProtocol {
     func logout() async throws
     func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
     func purchase(app: AppStoreApp, account: Account) async throws
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
+    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
+    func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput
 }
 
 final class AppStoreService: AppStoreServiceProtocol {
@@ -299,15 +300,20 @@ final class AppStoreService: AppStoreServiceProtocol {
         let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
-            if failureType == Constant.failureTypePasswordTokenExpired {
+            let customerMessage = plist?["customerMessage"] as? String ?? ""
+            if Constant.authFailureCodes.contains(failureType) ||
+               customerMessage == Constant.customerMessagePasswordChanged {
                 throw LoginError.tokenExpired
+            }
+            if failureType == Constant.failureTypeLicenseAlreadyExists {
+                throw LoginError.unknownError("License already exists")
             }
             if failureType == Constant.failureTypeTemporarilyUnavailable {
                 throw LoginError.unknownError("Item is temporarily unavailable")
             }
             if !failureType.isEmpty {
-                let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
-                throw LoginError.unknownError(customerMessage)
+                let msg = customerMessage.isEmpty ? "Unknown error" : customerMessage
+                throw LoginError.unknownError(msg)
             }
         }
 
@@ -320,7 +326,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Download
-    func download(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
+    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
         var purchased = false
 
         do {
@@ -346,7 +352,7 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.unknownError("Failed to verify app license")
         }
 
-        let result = try await performDownload(app: app, account: account, outputPath: outputPath, progress: progress)
+        let result = try await performDownload(app: app, account: account, outputPath: outputPath, externalVersionId: externalVersionId, progress: progress)
 
         if result.success, let modelContext {
             if await findExistingDownloadedApp(app: app, context: modelContext) != nil {
@@ -404,7 +410,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
 
         if let failureType = plist?["failureType"] as? String {
-            if failureType == Constant.failureTypePasswordTokenExpired {
+            if Constant.authFailureCodes.contains(failureType) {
                 throw LoginError.tokenExpired
             }
             if failureType == Constant.failureTypeLicenseNotFound {
@@ -417,7 +423,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
     }
 
-    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, progress: ((Double, Int64, Int64) -> Void)? = nil) async throws -> DownloadOutput {
+    private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil) async throws -> DownloadOutput {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -435,11 +441,14 @@ final class AppStoreService: AppStoreServiceProtocol {
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
         request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "creditDisplay": "",
             "guid": guid,
             "salableAdamId": app.id ?? 0
         ]
+        if let versionId = externalVersionId {
+            payload["externalVersionId"] = versionId
+        }
 
         let plistData = try PropertyListSerialization.data(
             fromPropertyList: payload,
@@ -574,6 +583,118 @@ final class AppStoreService: AppStoreServiceProtocol {
         try FileManager.default.moveItem(at: tempURL, to: destinationURL)
 
         return response
+    }
+
+    // MARK: - List Versions
+    func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput {
+        let deviceID = try await getDeviceIdentifier()
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+
+        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
+        let urlString = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
+
+        guard let url = URL(string: urlString) else {
+            throw LoginError.networkError
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+
+        let payload: [String: Any] = [
+            "creditDisplay": "",
+            "guid": guid,
+            "salableAdamId": app.id ?? 0
+        ]
+
+        let plistData = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
+        request.httpBody = plistData
+
+        logger.logRequest(request)
+        let (data, response) = try await session.data(for: request)
+        logger.logResponse(response, data: data, error: nil)
+
+        let normalizedData = normalizePlistData(data)
+        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
+
+        if let failureType = plist?["failureType"] as? String, !failureType.isEmpty {
+            if Constant.authFailureCodes.contains(failureType) {
+                throw LoginError.tokenExpired
+            }
+            if failureType == Constant.failureTypeLicenseNotFound {
+                throw LoginError.licenseRequired
+            }
+            let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
+            throw LoginError.unknownError(customerMessage)
+        }
+
+        guard let items = plist?["songList"] as? [[String: Any]],
+              let firstItem = items.first else {
+            throw LoginError.unknownError("Invalid response from App Store")
+        }
+
+        let metadata = firstItem["metadata"] as? [String: Any] ?? [:]
+
+        guard let rawIds = metadata["softwareVersionExternalIdentifiers"] as? [Any] else {
+            throw LoginError.unknownError("No version information available for this app")
+        }
+
+        let versionIds = rawIds.map { "\($0)" }
+        let latestVersionId = metadata["softwareVersionExternalIdentifier"].map { "\($0)" } ?? versionIds.last ?? ""
+
+        return VersionsOutput(versionIds: versionIds, latestVersionId: latestVersionId)
+    }
+
+    // MARK: - Fetch Version Display Name
+    func fetchVersionDisplayName(app: AppStoreApp, account: Account, versionId: String) async throws -> String {
+        let deviceID = try await getDeviceIdentifier()
+        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
+
+        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
+        let urlString = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
+
+        guard let url = URL(string: urlString) else { throw LoginError.networkError }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+
+        let payload: [String: Any] = [
+            "creditDisplay": "",
+            "guid": guid,
+            "salableAdamId": app.id ?? 0,
+            "externalVersionId": versionId
+        ]
+        request.httpBody = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
+
+        let (data, _) = try await session.data(for: request)
+        let normalizedData = normalizePlistData(data)
+        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
+
+        if let failureType = plist?["failureType"] as? String, !failureType.isEmpty {
+            if Constant.authFailureCodes.contains(failureType) {
+                throw LoginError.tokenExpired
+            }
+            throw LoginError.unknownError(failureType)
+        }
+
+        guard let items = plist?["songList"] as? [[String: Any]],
+              let firstItem = items.first,
+              let metadata = firstItem["metadata"] as? [String: Any] else {
+            throw LoginError.unknownError("No metadata in response")
+        }
+
+        for key in ["bundleShortVersionString", "CFBundleShortVersionString"] {
+            if let v = metadata[key] as? String, !v.isEmpty { return v }
+        }
+
+        throw LoginError.unknownError("No version string in metadata")
     }
 
     // MARK: - Private Methods
@@ -921,12 +1042,19 @@ private extension AppStoreService {
     enum Constant {
         static let failureTypeInvalidCredentials = "-5000"
         static let failureTypePasswordTokenExpired = "2034"
+        static let failureTypeSignInRequired = "2042"
+        static let failureTypeDeviceVerificationFailed = "1008"
         static let failureTypeLicenseNotFound = "9610"
+        static let failureTypeLicenseAlreadyExists = "5002"
         static let failureTypeTemporarilyUnavailable = "2059"
+
+        // Auth failure codes that all indicate session expiry / re-auth required
+        static let authFailureCodes: Set<String> = ["-5000", "1008", "2002", "2034", "2042"]
 
         static let customerMessageBadLogin = "MZFinance.BadLogin.Configurator_message"
         static let customerMessageAccountDisabled = "Your account is disabled."
         static let customerMessageSubscriptionRequired = "Subscription Required"
+        static let customerMessagePasswordChanged = "Your password has changed."
 
         static let iTunesAPIDomain = "itunes.apple.com"
         static let iTunesAPIPathSearch = "/search"

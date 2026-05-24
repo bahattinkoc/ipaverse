@@ -14,8 +14,8 @@ struct DownloadedView: View {
     @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var downloadStates: [String: DownloadState] = [:]
-    
+    @State private var selectedApp: AppStoreApp?
+
     var body: some View {
         NavigationStack {
             Group {
@@ -63,9 +63,9 @@ struct DownloadedView: View {
                     List(downloadedApps) { downloadedApp in
                         DownloadedAppRow(
                             downloadedApp: downloadedApp,
-                            downloadState: downloadStates[downloadedApp.id] ?? .idle
+                            downloadState: .idle
                         ) {
-                            redownloadApp(downloadedApp)
+                            openDetailSheet(for: downloadedApp)
                         }
                     }
                     .refreshable {
@@ -78,92 +78,28 @@ struct DownloadedView: View {
         .onAppear {
             loadDownloadedApps()
         }
-        .onDisappear {
-            downloadStates.removeAll()
+        .sheet(item: $selectedApp) { app in
+            AppDetailView(app: app, account: account)
         }
     }
-    
+
     private func loadDownloadedApps() {
         isLoading = true
         errorMessage = nil
-        
         Task {
-            await MainActor.run {
-                isLoading = false
-            }
+            await MainActor.run { isLoading = false }
         }
     }
-    
-    private func redownloadApp(_ downloadedApp: DownloadedApp) {
-        let appId = downloadedApp.id
-        
-        Task { @MainActor in
-            downloadStates[appId] = .purchasing
-        }
-        
-        Task {
-            do {
-                let appStoreService = AppStoreService()
-                let app = AppStoreApp(
-                    id: downloadedApp.appId,
-                    bundleID: downloadedApp.bundleID,
-                    name: downloadedApp.name,
-                    version: downloadedApp.version,
-                    price: downloadedApp.price,
-                    iconURL: downloadedApp.iconURL
-                )
-                
-                let downloadType = getDownloadTypeFromSettings()
-                let fileExtension = downloadType.rawValue
-                let fileName = "\(downloadedApp.bundleID)_\(downloadedApp.version).\(fileExtension)"
-                let outputPath = getOutputPath(fileName: fileName)
-                
-                let output = try await appStoreService.download(
-                    app: app,
-                    account: account,
-                    outputPath: outputPath,
-                    progress: { progress, bytesWritten, totalBytes in
-                        Task { @MainActor in
-                            if progress >= 1.0 {
-                                downloadStates[appId] = .idle
-                            } else {
-                                downloadStates[appId] = .downloading(progress: progress, bytesWritten: bytesWritten, totalBytes: totalBytes)
-                            }
-                        }
-                    },
-                    modelContext: modelContext
-                )
-                
-                await MainActor.run {
-                    if !output.success {
-                        errorMessage = "Redownload failed: \(output.error ?? "Unknown error")"
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    downloadStates[appId] = .idle
-                    errorMessage = "Failed to redownload: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-    
-    private func getDownloadTypeFromSettings() -> DownloadType {
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data) {
-            return settings.defaultDownloadType
-        }
-        return .ipa
-    }
-    
-    private func getOutputPath(fileName: String) -> String {
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data),
-           !settings.defaultDownloadPath.isEmpty {
-            return "\(settings.defaultDownloadPath)/\(fileName)"
-        }
-        
-        let downloadsPath = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? ""
-        return "\(downloadsPath)/\(fileName)"
+
+    private func openDetailSheet(for downloadedApp: DownloadedApp) {
+        selectedApp = AppStoreApp(
+            id: downloadedApp.appId,
+            bundleID: downloadedApp.bundleID,
+            name: downloadedApp.name,
+            version: downloadedApp.version,
+            price: downloadedApp.price,
+            iconURL: downloadedApp.iconURL,
+            platform: downloadedApp.platform.flatMap { AppPlatform(rawValue: $0) }
+        )
     }
 }

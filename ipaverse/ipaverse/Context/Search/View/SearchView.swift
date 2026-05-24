@@ -91,7 +91,7 @@ struct SearchView: View {
                         List(viewModel.searchResults) { app in
                             SearchResultRow(
                                 app: app,
-                                downloadState: viewModel.currentDownloadApp?.id == app.id ? viewModel.downloadState : .idle
+                                downloadState: .idle
                             ) {
                                 viewModel.downloadApp(app)
                             }
@@ -107,10 +107,8 @@ struct SearchView: View {
                 viewModel.setup(modelContext: modelContext, loginViewModel: loginViewModel)
             }
         }
-        .onChange(of: viewModel.showingSavePanel) { _, newValue in
-            if newValue {
-                viewModel.showSavePanel()
-            }
+        .sheet(item: $viewModel.selectedDetailApp) { app in
+            AppDetailView(app: app, account: account)
         }
     }
 

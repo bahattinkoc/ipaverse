@@ -91,3 +91,20 @@ struct DownloadOutput {
     let success: Bool
     let error: String?
 }
+
+struct AppVersion: Identifiable {
+    let id: String
+    let isLatest: Bool
+    var displayVersion: String?
+}
+
+enum VersionsLoadState {
+    case loading
+    case loaded([AppVersion])
+    case error(String)
+}
+
+struct VersionsOutput {
+    let versionIds: [String]
+    let latestVersionId: String
+}

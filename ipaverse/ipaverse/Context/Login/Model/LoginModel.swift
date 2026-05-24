@@ -82,8 +82,9 @@ enum LoginError: LocalizedError, Equatable {
     case twoFactorRequired
     case accountLocked
     case tokenExpired
+    case licenseRequired
     case unknownError(String)
-    
+
     var errorDescription: String? {
         switch self {
         case .invalidCredentials: "Invalid Apple ID or password"
@@ -91,6 +92,7 @@ enum LoginError: LocalizedError, Equatable {
         case .twoFactorRequired: "Two-factor authentication required"
         case .accountLocked: "Account locked"
         case .tokenExpired: "Session expired. Please login again."
+        case .licenseRequired: "License required"
         case .unknownError(let message): message
         }
     }
