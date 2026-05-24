@@ -16,6 +16,7 @@ protocol AppStoreServiceProtocol {
     func validateToken(_ token: String) async throws -> Bool
     func logout() async throws
     func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
+    func lookup(bundleID: String, account: Account, platform: AppPlatform) async throws -> AppStoreApp
     func purchase(app: AppStoreApp, account: Account) async throws
     func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
     func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput
@@ -225,6 +226,50 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         return searchResult
+    }
+
+    func lookup(bundleID: String, account: Account, platform: AppPlatform) async throws -> AppStoreApp {
+        let countryCode = getCountryCodeFromStoreFront(account.storeFront)
+
+        let entity: String
+        switch platform {
+        case .ios: entity = "software,iPadSoftware"
+        case .macos: entity = "macSoftware"
+        }
+
+        let encodedID = bundleID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? bundleID
+        let urlString = "https://\(Constant.iTunesAPIDomain)\(Constant.iTunesAPIPathLookup)?bundleId=\(encodedID)&entity=\(entity)&limit=1&media=software&country=\(countryCode)"
+
+        guard let url = URL(string: urlString) else { throw LoginError.networkError }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+
+        logger.logRequest(request)
+        let (data, response) = try await session.data(for: request)
+        logger.logResponse(response, data: data, error: nil)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+
+        let result = try JSONDecoder().decode(SearchResult.self, from: data)
+        guard let raw = result.results?.first else {
+            throw LoginError.unknownError("App not found")
+        }
+
+        return AppStoreApp(
+            id: raw.id ?? 0,
+            bundleID: raw.bundleID ?? "",
+            name: raw.name ?? "",
+            version: raw.version ?? "",
+            price: raw.price ?? 0.0,
+            iconURL: raw.iconURL,
+            platform: platform
+        )
     }
 
     // MARK: - Purchase

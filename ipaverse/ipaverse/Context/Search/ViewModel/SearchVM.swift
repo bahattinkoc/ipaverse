@@ -79,33 +79,43 @@ final class SearchVM: ObservableObject {
         searchHistory = history
     }
 
+    var isLookupMode: Bool {
+        isBundleID(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func isBundleID(_ text: String) -> Bool {
+        guard !text.contains(" "), text.contains(".") else { return false }
+        let lower = text.lowercased()
+        return ["com.", "net.", "org.", "io.", "app.", "co.", "me."].contains(where: { lower.hasPrefix($0) })
+    }
+
     func performSearch() {
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
 
         isLoading = true
         errorMessage = nil
         isSearching = true
 
-        saveSearchHistory()
+        if !isBundleID(trimmed) { saveSearchHistory() }
 
         Task {
             do {
-                let appStoreService = AppStoreService()
-                let result = try await appStoreService.search(
-                    term: searchText.trimmingCharacters(in: .whitespacesAndNewlines),
-                    account: account,
-                    limit: 5,
-                    platform: selectedPlatform
-                )
-
-                guard let results = result.results else { return }
-
-                searchResults = results
+                let service = AppStoreService()
+                if isBundleID(trimmed) {
+                    let app = try await service.lookup(bundleID: trimmed, account: account, platform: selectedPlatform)
+                    searchResults = [app]
+                } else {
+                    let result = try await service.search(term: trimmed, account: account, limit: 5, platform: selectedPlatform)
+                    searchResults = result.results ?? []
+                }
                 isLoading = false
                 isSearching = false
-
             } catch {
-                errorMessage = "Search failed: \(error.localizedDescription)"
+                let msg = isBundleID(trimmed)
+                    ? "App not found: \(trimmed)"
+                    : "Search failed: \(error.localizedDescription)"
+                errorMessage = msg
                 isLoading = false
                 isSearching = false
             }

@@ -114,20 +114,30 @@ struct SearchView: View {
 
     private var searchBar: some View {
         HStack {
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
+            HStack(spacing: 6) {
+                Image(systemName: viewModel.isLookupMode ? "tag" : "magnifyingglass")
+                    .foregroundColor(viewModel.isLookupMode ? .accentColor : .gray)
+                    .animation(.easeInOut(duration: 0.15), value: viewModel.isLookupMode)
 
-                TextField("Search apps...", text: $viewModel.searchText)
+                if viewModel.isLookupMode {
+                    Text("Bundle ID")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor)
+                        .cornerRadius(4)
+                        .transition(.scale.combined(with: .opacity))
+                }
+
+                TextField(viewModel.isLookupMode ? "com.example.app" : "Search apps...", text: $viewModel.searchText)
                     .textFieldStyle(PlainTextFieldStyle())
                     .onSubmit {
                         viewModel.performSearch()
                     }
 
                 if !viewModel.searchText.isEmpty {
-                    Button(action: {
-                        viewModel.clearSearch()
-                    }) {
+                    Button(action: { viewModel.clearSearch() }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.gray)
                     }
@@ -138,6 +148,7 @@ struct SearchView: View {
             .padding(.vertical, 8)
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(10)
+            .animation(.easeInOut(duration: 0.15), value: viewModel.isLookupMode)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
