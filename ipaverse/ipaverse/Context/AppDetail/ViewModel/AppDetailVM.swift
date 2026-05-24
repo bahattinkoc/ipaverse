@@ -88,21 +88,22 @@ final class AppDetailVM: ObservableObject {
         let app = self.app
         let account = self.account
 
-        await withTaskGroup(of: (String, String?).self) { group in
+        await withTaskGroup(of: (String, VersionDisplayInfo?).self) { group in
             for version in versions {
                 group.addTask {
-                    let name = try? await service.fetchVersionDisplayName(
+                    let info = try? await service.fetchVersionDisplayName(
                         app: app, account: account, versionId: version.id
                     )
-                    return (version.id, name)
+                    return (version.id, info)
                 }
             }
 
-            for await (id, displayVersion) in group {
-                guard displayVersion != nil,
+            for await (id, info) in group {
+                guard let info,
                       case .loaded(var current) = self.versionsState,
                       let index = current.firstIndex(where: { $0.id == id }) else { continue }
-                current[index].displayVersion = displayVersion
+                current[index].displayVersion = info.versionString
+                current[index].releaseDate = info.releaseDate
                 self.versionsState = .loaded(current)
             }
         }

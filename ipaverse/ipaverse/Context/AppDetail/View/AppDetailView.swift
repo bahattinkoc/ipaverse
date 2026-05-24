@@ -148,6 +148,11 @@ struct AppDetailView: View {
                     Text(displayVersion)
                         .font(.body)
                         .foregroundColor(.primary)
+                    if let date = version.releaseDate {
+                        Text(date, format: .dateTime.year().month(.abbreviated).day())
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 } else {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.6)

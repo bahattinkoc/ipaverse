@@ -96,6 +96,12 @@ struct AppVersion: Identifiable {
     let id: String
     let isLatest: Bool
     var displayVersion: String?
+    var releaseDate: Date?
+}
+
+struct VersionDisplayInfo {
+    let versionString: String
+    let releaseDate: Date?
 }
 
 enum VersionsLoadState {

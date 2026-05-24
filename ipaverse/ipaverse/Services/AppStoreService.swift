@@ -675,7 +675,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Fetch Version Display Name
-    func fetchVersionDisplayName(app: AppStoreApp, account: Account, versionId: String) async throws -> String {
+    func fetchVersionDisplayName(app: AppStoreApp, account: Account, versionId: String) async throws -> VersionDisplayInfo {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
@@ -716,8 +716,20 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.unknownError("No metadata in response")
         }
 
+        // Try to get accurate metadata from the actual IPA via partial ZIP range requests.
+        // API metadata can be stale (ipatool comment: "Do not fall back to item.Metadata here").
+        if let cdnURLString = firstItem["URL"] as? String,
+           let cdnURL = URL(string: cdnURLString) {
+            if let info = try? await PartialZIPReader(url: cdnURL).readVersionMetadata() {
+                return info
+            }
+        }
+
+        // Fallback: use metadata from API response (may be stale for older versions)
         for key in ["bundleShortVersionString", "CFBundleShortVersionString"] {
-            if let v = metadata[key] as? String, !v.isEmpty { return v }
+            if let v = metadata[key] as? String, !v.isEmpty {
+                return VersionDisplayInfo(versionString: v, releaseDate: nil)
+            }
         }
 
         throw LoginError.unknownError("No version string in metadata")

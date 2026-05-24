@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A02E42B9470094874D /* libz.tbd */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		6B87C4832E42B9450094874D /* ipaverse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ipaverse.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B87C4A02E42B9470094874D /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +28,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -277,6 +283,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = ipaverse/ipaverse-Bridging-Header.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -309,6 +316,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = ipaverse/ipaverse-Bridging-Header.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
