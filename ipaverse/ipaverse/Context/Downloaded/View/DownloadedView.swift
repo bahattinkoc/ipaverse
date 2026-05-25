@@ -9,6 +9,12 @@ import SwiftUI
 import SwiftData
 import AppKit
 
+private struct IPAInstallContext: Identifiable {
+    let id = UUID()
+    let ipaPath: String
+    let appName: String
+}
+
 struct DownloadedView: View {
     let account: Account
     @EnvironmentObject private var loginViewModel: LoginVM
@@ -18,6 +24,7 @@ struct DownloadedView: View {
     @State private var errorMessage: String?
     @State private var selectedApp: AppStoreApp?
     @State private var appToSign: DownloadedApp?
+    @State private var installContext: IPAInstallContext?
 
     var body: some View {
         NavigationStack {
@@ -85,6 +92,15 @@ struct DownloadedView: View {
                                 Label("Edit & Sign", systemImage: "signature")
                             }
 
+                            Button {
+                                installContext = IPAInstallContext(
+                                    ipaPath: downloadedApp.filePath,
+                                    appName: downloadedApp.name
+                                )
+                            } label: {
+                                Label("Install to Device", systemImage: "iphone.and.arrow.forward")
+                            }
+
                             Divider()
 
                             Button(role: .destructive) {
@@ -108,7 +124,12 @@ struct DownloadedView: View {
             AppDetailView(app: app, account: loginViewModel.currentAccount ?? account)
         }
         .sheet(item: $appToSign) { app in
-            ResigningView(downloadedApp: app)
+            ResigningView(downloadedApp: app) { signedPath in
+                installContext = IPAInstallContext(ipaPath: signedPath, appName: app.name)
+            }
+        }
+        .sheet(item: $installContext) { ctx in
+            DeviceInstallView(ipaPath: ctx.ipaPath, appName: ctx.appName)
         }
     }
 

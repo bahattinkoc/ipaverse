@@ -134,6 +134,7 @@ struct IPAResigner {
         ipaPath: String,
         config: ResignConfig,
         outputPath: String,
+        allowFairPlayEncrypted: Bool = false,
         progress: @escaping (String) -> Void
     ) throws {
         let workDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -153,8 +154,11 @@ struct IPAResigner {
         let mainBinaryURL = appURL.appendingPathComponent(appName)
         print("⚙️ [IPAResigner] Checking FairPlay: \(mainBinaryURL.lastPathComponent)")
         if isFairPlayEncrypted(binaryURL: mainBinaryURL) {
-            print("⚙️ [IPAResigner] ❌ FairPlay encrypted (cryptid=1) — signing aborted")
-            throw IPAResignError.fairPlayEncrypted
+            print("⚙️ [IPAResigner] ❌ FairPlay encrypted (cryptid=1)")
+            if !allowFairPlayEncrypted {
+                throw IPAResignError.fairPlayEncrypted
+            }
+            print("⚙️ [IPAResigner] ⚠️ Continuing despite FairPlay encryption (user override)")
         }
         print("⚙️ [IPAResigner] ✓ Not FairPlay encrypted (cryptid=0)")
 

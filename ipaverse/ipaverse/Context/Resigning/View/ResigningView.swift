@@ -12,8 +12,13 @@ struct ResigningView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: ResigningVM
 
-    init(downloadedApp: DownloadedApp) {
+    /// Called when the user clicks "Install to Device" after a successful sign.
+    /// Passes the signed IPA path; caller should dismiss this sheet then open DeviceInstallView.
+    var onInstall: ((String) -> Void)?
+
+    init(downloadedApp: DownloadedApp, onInstall: ((String) -> Void)? = nil) {
         self._viewModel = StateObject(wrappedValue: ResigningVM(downloadedApp: downloadedApp))
+        self.onInstall = onInstall
     }
 
     var body: some View {
@@ -28,6 +33,15 @@ struct ResigningView: View {
         }
         .frame(width: 580, height: 620)
         .onAppear { Task { await viewModel.load() } }
+        .alert("FairPlay Encrypted", isPresented: Binding(
+            get: { viewModel.isFairPlayWarning },
+            set: { if !$0 { viewModel.cancelFairPlayWarning() } }
+        )) {
+            Button("Cancel", role: .cancel) { viewModel.cancelFairPlayWarning() }
+            Button("Continue Anyway", role: .destructive) { viewModel.continueDespiteFairPlay() }
+        } message: {
+            Text("This IPA is encrypted with FairPlay DRM. Re-signing an encrypted binary will likely produce a broken app that cannot launch on the device.\n\nYou can still continue if you know the binary has been decrypted.")
+        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.state = .idle } }
@@ -255,7 +269,44 @@ struct ResigningView: View {
         .padding(.bottom, 12)
     }
 
+    @ViewBuilder
     private var actionRow: some View {
+        if let path = viewModel.signedOutputPath {
+            signedActionRow(outputPath: path)
+        } else {
+            signingActionRow
+        }
+    }
+
+    private func signedActionRow(outputPath: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .font(.caption)
+            Text("Signed successfully")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Button("Done") { dismiss() }
+                .buttonStyle(.bordered)
+
+            Button {
+                dismiss()
+                onInstall?(outputPath)
+            } label: {
+                Label("Install to Device", systemImage: "iphone.and.arrow.forward")
+                    .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 12)
+    }
+
+    private var signingActionRow: some View {
         HStack(spacing: 8) {
             if let msg = viewModel.signingMessage {
                 ProgressView().scaleEffect(0.75)
@@ -386,3 +437,4 @@ private struct FileNodeRow: View {
         }
     }
 }
+

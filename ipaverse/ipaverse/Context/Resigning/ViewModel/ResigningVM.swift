@@ -73,12 +73,15 @@ final class ResigningVM: ObservableObject {
         case idle
         case loading
         case signing(message: String)
+        case signed(outputPath: String)
+        case fairPlayWarning
         case error(String)
 
         static func == (lhs: State, rhs: State) -> Bool {
             switch (lhs, rhs) {
-            case (.idle, .idle), (.loading, .loading): return true
+            case (.idle, .idle), (.loading, .loading), (.fairPlayWarning, .fairPlayWarning): return true
             case (.signing(let a), .signing(let b)): return a == b
+            case (.signed(let a), .signed(let b)): return a == b
             case (.error(let a), .error(let b)): return a == b
             default: return false
             }
@@ -99,6 +102,10 @@ final class ResigningVM: ObservableObject {
 
     let downloadedApp: DownloadedApp
 
+    // Pending values retained so the user can retry after FairPlay warning
+    private var pendingCertificate: ResignerCertificate?
+    private var pendingOutputPath: String?
+
     init(downloadedApp: DownloadedApp) {
         self.downloadedApp = downloadedApp
     }
@@ -112,6 +119,13 @@ final class ResigningVM: ObservableObject {
         if case .signing(let msg) = state { return msg }
         return nil
     }
+
+    var signedOutputPath: String? {
+        if case .signed(let path) = state { return path }
+        return nil
+    }
+
+    var isFairPlayWarning: Bool { state == .fairPlayWarning }
 
     var errorMessage: String? {
         if case .error(let msg) = state { return msg }
@@ -217,7 +231,26 @@ final class ResigningVM: ObservableObject {
         }
     }
 
-    private func performSign(certificate: ResignerCertificate, outputPath: String) {
+    // Called when user taps "Continue Anyway" on the FairPlay warning
+    func continueDespiteFairPlay() {
+        guard let cert = pendingCertificate, let path = pendingOutputPath else { return }
+        pendingCertificate = nil
+        pendingOutputPath = nil
+        performSign(certificate: cert, outputPath: path, allowFairPlayEncrypted: true)
+    }
+
+    // Called when user taps "Cancel" on the FairPlay warning
+    func cancelFairPlayWarning() {
+        pendingCertificate = nil
+        pendingOutputPath = nil
+        state = .idle
+    }
+
+    private func performSign(
+        certificate: ResignerCertificate,
+        outputPath: String,
+        allowFairPlayEncrypted: Bool = false
+    ) {
         let config = ResignConfig(
             certificate: certificate,
             plistEdits: Dictionary(uniqueKeysWithValues: plistEntries
@@ -231,10 +264,21 @@ final class ResigningVM: ObservableObject {
 
         Task.detached { [self] in
             do {
-                try IPAResigner().sign(ipaPath: ipaPath, config: config, outputPath: outputPath) { message in
+                try IPAResigner().sign(
+                    ipaPath: ipaPath,
+                    config: config,
+                    outputPath: outputPath,
+                    allowFairPlayEncrypted: allowFairPlayEncrypted
+                ) { message in
                     Task { @MainActor [self] in self.state = .signing(message: message) }
                 }
-                await MainActor.run { self.state = .idle }
+                await MainActor.run { self.state = .signed(outputPath: outputPath) }
+            } catch IPAResignError.fairPlayEncrypted {
+                await MainActor.run {
+                    self.pendingCertificate = certificate
+                    self.pendingOutputPath = outputPath
+                    self.state = .fairPlayWarning
+                }
             } catch {
                 await MainActor.run { self.state = .error(error.localizedDescription) }
             }
