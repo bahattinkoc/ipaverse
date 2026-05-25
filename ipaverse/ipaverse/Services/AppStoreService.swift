@@ -44,7 +44,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - Login
     func login(credentials: LoginCredentials) async throws -> Account {
         let deviceID = try await getDeviceIdentifier()
-        let bag = try await fetchBag(deviceID: deviceID)
+        var bag = try await fetchBag(deviceID: deviceID)
         var redirect = ""
         var attempt = 1
         let maxAttempts = 4
@@ -75,7 +75,14 @@ final class AppStoreService: AppStoreServiceProtocol {
             )
 
             if parseResult.shouldRetry {
-                redirect = parseResult.redirectURL ?? ""
+                if let redirectURL = parseResult.redirectURL {
+                    redirect = redirectURL
+                } else {
+                    // Transient server error — re-fetch bag to get a fresh session context
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    bag = try await fetchBag(deviceID: deviceID)
+                    redirect = ""
+                }
                 attempt += 1
                 continue
             }
@@ -847,17 +854,31 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.accountLocked
         }
 
-        if failureType.isEmpty && authCode == nil && customerMessage == Constant.customerMessageBadLogin {
-            throw LoginError.twoFactorRequired
+        if failureType.isEmpty && customerMessage == Constant.customerMessageBadLogin {
+            // If authCode was provided, the code itself was wrong; otherwise 2FA is needed
+            if authCode != nil {
+                throw LoginError.invalidAuthCode
+            } else {
+                throw LoginError.twoFactorRequired
+            }
         }
 
-        if failureType.isEmpty && authCode != nil && customerMessage == Constant.customerMessageBadLogin {
-            throw LoginError.twoFactorRequired
+        // Transient Apple server error — signal a retry with a fresh bag session
+        if failureType == Constant.failureTypeTransientError {
+            return LoginParseResult(shouldRetry: true)
         }
 
         if !failureType.isEmpty {
             let message = customerMessage.isEmpty ? "Unknown error" : customerMessage
             throw LoginError.unknownError(message)
+        }
+
+        // failureType is empty but Apple returned an account restriction message
+        // (e.g. "iTunes account creation not allowed.", "m-allowed: false", etc.)
+        if !customerMessage.isEmpty {
+            let dialog = plist["dialog"] as? [String: Any]
+            let explanation = dialog?["explanation"] as? String ?? ""
+            throw LoginError.unknownError(explanation.isEmpty ? customerMessage : explanation)
         }
 
         if statusCode != 200 || plist["passwordToken"] as? String == nil || plist["dsPersonId"] as? String == nil {
@@ -1134,6 +1155,8 @@ private extension AppStoreService {
         static let failureTypeLicenseNotFound = "9610"
         static let failureTypeLicenseAlreadyExists = "5002"
         static let failureTypeTemporarilyUnavailable = "2059"
+        // Apple transient server error during auth — safe to retry with a fresh session
+        static let failureTypeTransientError = "5005"
 
         // Auth failure codes that all indicate session expiry / re-auth required
         static let authFailureCodes: Set<String> = ["-5000", "1008", "2002", "2034", "2042"]

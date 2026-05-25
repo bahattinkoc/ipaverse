@@ -86,7 +86,12 @@ final class LoginVM: ObservableObject {
         } catch LoginError.twoFactorRequired {
             showAuthCodeField = true
             loginState = .requires2FA
-            errorMessage = "Two-factor authentication code required"
+            errorMessage = ""
+
+        } catch LoginError.invalidAuthCode {
+            authCode = ""
+            loginState = .requires2FA
+            errorMessage = "Invalid verification code. Please try again."
 
         } catch LoginError.invalidCredentials {
             loginState = .error("Invalid Apple ID or password")
@@ -135,7 +140,8 @@ final class LoginVM: ObservableObject {
         } catch LoginError.twoFactorRequired {
             showAuthCodeField = true
             loginState = .requires2FA
-            errorMessage = "New verification code sent. Please check your device."
+            errorMessage = ""
+            toastMessage = "A new verification code was sent to your trusted devices."
 
         } catch LoginError.invalidCredentials {
             loginState = .error("Invalid Apple ID or password")
@@ -171,7 +177,7 @@ final class LoginVM: ObservableObject {
                 toastMessage = message
             }
         } catch {
-            errorMessage = "An error occurred while logging out.: \(error.localizedDescription)"
+            errorMessage = "An error occurred while logging out: \(error.localizedDescription)"
             loginState = .error(error.localizedDescription)
         }
     }

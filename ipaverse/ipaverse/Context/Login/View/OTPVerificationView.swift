@@ -20,14 +20,15 @@ struct OTPVerificationView: View {
         }
         .background {
             TextField("", text: $otpText)
-                .textContentType(.oneTimeCode)
                 .frame(width: 1, height: 1)
                 .opacity(0.001)
                 .blendMode(.screen)
                 .focused($isKeyboardShowing)
                 .onChange(of: otpText) { _, newValue in
-                    if newValue.count > 6 {
-                        otpText = String(newValue.prefix(6))
+                    let digits = newValue.filter(\.isNumber)
+                    let clamped = String(digits.prefix(6))
+                    if clamped != newValue {
+                        otpText = clamped
                     }
                 }
         }

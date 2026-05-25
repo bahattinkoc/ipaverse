@@ -220,17 +220,30 @@ struct LoginView: View {
 
     private var twoFactorSection: some View {
         VStack(spacing: 24) {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 Text("Two-Factor Authentication")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
 
-                Text("Enter the 6-digit verification code sent to your trusted device")
-                    .font(.system(size: 16, weight: .medium))
+                Text("Apple sent a 6-digit verification code to your trusted devices.")
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "iphone")
+                    Image(systemName: "ipad")
+                    Image(systemName: "laptopcomputer")
+                }
+                .font(.system(size: 18))
+                .foregroundColor(.secondary.opacity(0.6))
+
+                Text("Check your iPhone, iPad, or Mac for a notification from Apple.")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .multilineTextAlignment(.center)
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 4)
 
             VStack(spacing: 16) {
                 Text("Verification Code")
@@ -239,6 +252,12 @@ struct LoginView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 OTPVerificationView(otpText: $viewModel.authCode)
+
+                Text("Didn't receive a code? Use the Resend button below.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding(.vertical, 8)
@@ -289,7 +308,7 @@ struct LoginView: View {
 
                 if viewModel.showAuthCodeField {
                     ModernSecondaryButton(
-                        title: "",
+                        title: "Resend",
                         icon: "arrow.clockwise",
                         action: {
                             Task {

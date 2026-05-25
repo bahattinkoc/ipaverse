@@ -96,6 +96,7 @@ enum LoginError: LocalizedError, Equatable {
     case invalidCredentials
     case networkError
     case twoFactorRequired
+    case invalidAuthCode
     case accountLocked
     case tokenExpired
     case licenseRequired
@@ -106,6 +107,7 @@ enum LoginError: LocalizedError, Equatable {
         case .invalidCredentials: "Invalid Apple ID or password"
         case .networkError: "Network connection error"
         case .twoFactorRequired: "Two-factor authentication required"
+        case .invalidAuthCode: "Invalid verification code. Please try again."
         case .accountLocked: "Account locked"
         case .tokenExpired: "Session expired. Please login again."
         case .licenseRequired: "License required"
