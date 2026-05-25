@@ -145,22 +145,55 @@ struct AppRowView: View {
     private var actionView: some View {
         switch appRowType {
         case .search(let downloadState):
-            downloadStateView(downloadState, action: onDownload)
+            switch downloadState {
+            case .idle:
+                searchGetButton
+            default:
+                downloadStateView(downloadState, action: onDownload)
+            }
         case .downloaded(let downloadState):
-            downloadStateView(downloadState, action: onRedownload)
+            switch downloadState {
+            case .idle:
+                redownloadButton
+            default:
+                downloadStateView(downloadState, action: onRedownload)
+            }
         }
+    }
+
+    private var searchGetButton: some View {
+        Button(action: onDownload) {
+            Text("GET")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.accentColor)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Color.accentColor.opacity(0.1))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var redownloadButton: some View {
+        Button(action: onRedownload) {
+            Image(systemName: "arrow.down.circle")
+                .foregroundColor(.secondary)
+                .font(.system(size: 20))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private func downloadStateView(_ downloadState: DownloadState, action: @escaping () -> Void) -> some View {
         switch downloadState {
         case .idle:
-            Button(action: action) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundColor(.blue)
-                    .font(.title2)
-            }
-            .buttonStyle(.plain)
+            EmptyView()
 
         case .purchasing:
             VStack(spacing: 4) {

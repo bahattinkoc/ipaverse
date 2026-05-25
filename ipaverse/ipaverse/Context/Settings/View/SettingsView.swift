@@ -14,189 +14,197 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    downloadSettingsSection
-                    searchHistorySection
-                    logoutSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+            Form {
+                profileSection
+                downloadsSection
+                searchSection
+                accountSection
             }
-            .background(Color(.windowBackgroundColor))
+            .formStyle(.grouped)
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .font(.system(.body, design: .default, weight: .medium))
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.return, modifiers: .command)
                 }
             }
         }
+        .frame(width: 460, height: 600)
     }
 
-    private var downloadSettingsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "Download Settings")
+    // MARK: - Profile
 
-            VStack(spacing: 12) {
-                downloadPathCard
-                downloadTypeCard
-            }
-        }
-    }
+    private var profileSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.12))
+                        .frame(width: 52, height: 52)
+                    Text(initials)
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        .foregroundColor(.accentColor)
+                }
 
-    private var downloadPathCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: "folder")
-                    .foregroundColor(.secondary)
-                    .font(.system(.body, design: .default))
-
-                Text("Default Save Path")
-                    .font(.system(.body, design: .default, weight: .medium))
-
-                Spacer()
-            }
-
-            Button {
-                viewModel.selectDownloadPath()
-            } label: {
-                HStack {
-                    Text(viewModel.settings.defaultDownloadPath.isEmpty ? "Select Folder" : viewModel.settings.defaultDownloadPath)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(loginViewModel.currentAccount?.name ?? "—")
+                        .font(.headline)
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                        .font(.system(.subheadline, design: .default))
-                        .foregroundColor(viewModel.settings.defaultDownloadPath.isEmpty ? .secondary : .primary)
 
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
+                    Text(loginViewModel.currentAccount?.email ?? "—")
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color(.controlBackgroundColor))
-                .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(10)
-    }
+                        .lineLimit(1)
 
-    private var downloadTypeCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: "doc")
-                    .foregroundColor(.secondary)
-                    .font(.system(.body, design: .default))
-
-                Text("Default Download Type")
-                    .font(.system(.body, design: .default, weight: .medium))
-
-                Spacer()
-            }
-
-            HStack(spacing: 8) {
-                ForEach(DownloadType.allCases, id: \.self) { type in
-                    Button {
-                        viewModel.updateDownloadType(type)
-                    } label: {
-                        Text(type.displayName)
-                            .font(.system(.subheadline, design: .default, weight: .medium))
-                            .foregroundColor(viewModel.settings.defaultDownloadType == type ? .white : .primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                viewModel.settings.defaultDownloadType == type ?
-                                Color.accentColor : Color(.controlBackgroundColor)
-                            )
-                            .cornerRadius(6)
+                    if let region = regionName {
+                        HStack(spacing: 4) {
+                            Image(systemName: "storefront")
+                                .font(.system(size: 10))
+                            Text(region)
+                                .font(.caption)
+                        }
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-        }
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(10)
-    }
-
-    private var searchHistorySection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(title: "Search History")
-
-            VStack(spacing: 12) {
-                if viewModel.settings.searchHistoryEnabled {
-                    clearHistoryCard
-                }
-            }
-        }
-    }
-
-    private var clearHistoryCard: some View {
-        Button {
-            viewModel.clearSearchHistory()
-        } label: {
-            HStack {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
-                    .font(.system(.body, design: .default))
-
-                Text("Clear Search History")
-                    .font(.system(.body, design: .default, weight: .medium))
-                    .foregroundColor(.red)
 
                 Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.red)
             }
-            .padding(16)
-            .background(Color(.controlBackgroundColor))
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.red.opacity(0.2), lineWidth: 1)
-            )
+            .padding(.vertical, 6)
+        } header: {
+            Text("Profile")
         }
-        .buttonStyle(.plain)
     }
 
-    private var logoutSection: some View {
-        VStack(spacing: 12) {
-            Button {
-                Task {
-                    await loginViewModel.logout()
+    private var initials: String {
+        guard let name = loginViewModel.currentAccount?.name, !name.isEmpty else { return "?" }
+        let letters = name.split(separator: " ").prefix(2).compactMap(\.first)
+        return String(letters).uppercased()
+    }
+
+    private var regionName: String? {
+        guard let storeFront = loginViewModel.currentAccount?.storeFront else { return nil }
+        let code = storeFront.components(separatedBy: "-").first ?? storeFront
+        return Self.storeFrontToCountry[code]
+    }
+
+    private static let storeFrontToCountry: [String: String] = [
+        "143441": "United States", "143442": "France", "143443": "Germany", "143444": "United Kingdom",
+        "143445": "Austria", "143446": "Belgium", "143447": "Finland", "143448": "Greece",
+        "143449": "Ireland", "143450": "Italy", "143451": "Luxembourg", "143452": "Netherlands",
+        "143453": "Portugal", "143454": "Spain", "143455": "Canada", "143456": "Sweden",
+        "143457": "Norway", "143458": "Denmark", "143459": "Switzerland", "143460": "Australia",
+        "143461": "New Zealand", "143462": "Japan", "143463": "Hong Kong", "143464": "Singapore",
+        "143465": "China", "143466": "South Korea", "143467": "India", "143468": "Mexico",
+        "143469": "Russia", "143470": "Taiwan", "143471": "Vietnam", "143472": "South Africa",
+        "143473": "Malaysia", "143474": "Philippines", "143475": "Thailand", "143476": "Indonesia",
+        "143477": "Pakistan", "143478": "Poland", "143479": "Saudi Arabia", "143480": "Turkey",
+        "143481": "UAE", "143482": "Hungary", "143483": "Chile", "143484": "Nepal",
+        "143485": "Panama", "143486": "Sri Lanka", "143487": "Romania", "143488": "Maldives",
+        "143489": "Czech Republic", "143490": "Bangladesh", "143491": "Israel", "143492": "Ukraine",
+        "143493": "Kuwait", "143494": "Croatia", "143495": "Costa Rica", "143496": "Slovakia",
+        "143497": "Lebanon", "143498": "Qatar", "143499": "Slovenia", "143500": "Serbia",
+        "143501": "Colombia", "143502": "Venezuela", "143503": "Brazil", "143504": "Guatemala",
+        "143505": "Argentina", "143506": "El Salvador", "143507": "Peru", "143508": "Dominican Republic",
+        "143509": "Ecuador", "143510": "Honduras", "143511": "Jamaica", "143512": "Nicaragua",
+        "143513": "Paraguay", "143514": "Uruguay", "143515": "Macau", "143516": "Egypt",
+        "143517": "Kazakhstan", "143518": "Estonia", "143519": "Latvia", "143520": "Lithuania",
+        "143521": "Malta", "143522": "Liechtenstein", "143523": "Moldova", "143524": "Armenia",
+        "143525": "Botswana", "143526": "Bulgaria", "143527": "Ivory Coast", "143528": "Jordan",
+        "143529": "Kenya", "143530": "Macedonia", "143531": "Madagascar", "143532": "Mali",
+        "143533": "Mauritius", "143534": "Niger", "143535": "Senegal", "143536": "Tunisia",
+        "143537": "Uganda", "143538": "Anguilla", "143539": "Bahamas", "143540": "Antigua & Barbuda",
+        "143541": "Barbados", "143542": "Bermuda", "143543": "Virgin Islands", "143544": "Cayman Islands",
+        "143545": "Dominica", "143546": "Grenada", "143547": "Montserrat", "143548": "St. Kitts & Nevis",
+        "143549": "St. Lucia", "143550": "St. Vincent & Grenadines", "143551": "Trinidad & Tobago",
+        "143552": "Turks & Caicos Islands", "143553": "Guyana", "143554": "Suriname",
+        "143555": "Belize", "143556": "Bolivia", "143557": "Cyprus", "143558": "Iceland",
+        "143559": "Bahrain", "143560": "Brunei", "143561": "Nigeria", "143562": "Oman",
+        "143563": "Algeria", "143564": "Angola", "143565": "Belarus", "143566": "Uzbekistan",
+        "143568": "Azerbaijan", "143572": "Tanzania", "143573": "Ghana", "143575": "Albania",
+        "143592": "Mongolia", "143615": "Georgia", "143617": "Iraq"
+    ]
+
+    // MARK: - Downloads
+
+    private var downloadsSection: some View {
+        Section {
+            LabeledContent {
+                Button {
+                    viewModel.selectDownloadPath()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(saveFolderName)
+                            .lineLimit(1)
+                            .foregroundColor(viewModel.settings.defaultDownloadPath.isEmpty ? .secondary : .primary)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    }
+                }
+                .buttonStyle(.plain)
+            } label: {
+                Label("Save Location", systemImage: "folder")
+            }
+
+            LabeledContent {
+                Picker("", selection: $viewModel.settings.defaultDownloadType) {
+                    ForEach(DownloadType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .onChange(of: viewModel.settings.defaultDownloadType) { _, _ in
+                    viewModel.saveSettings()
                 }
             } label: {
-                HStack {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(.body, design: .default))
-
-                    Text("Sign Out")
-                        .font(.system(.body, design: .default, weight: .medium))
-                }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.red)
-                .cornerRadius(10)
+                Label("File Format", systemImage: "doc")
             }
-            .buttonStyle(.plain)
+        } header: {
+            Text("Downloads")
         }
     }
 
-    private func sectionHeader(title: String) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.system(.title3, design: .default, weight: .semibold))
-                .foregroundColor(.primary)
+    private var saveFolderName: String {
+        let path = viewModel.settings.defaultDownloadPath
+        guard !path.isEmpty else { return "Not Set" }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    // MARK: - Search
+
+    private var searchSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { viewModel.settings.searchHistoryEnabled },
+                set: { _ in viewModel.toggleSearchHistory() }
+            )) {
+                Label("Save Search History", systemImage: "clock")
+            }
+
+            if viewModel.settings.searchHistoryEnabled {
+                Button(role: .destructive) {
+                    viewModel.clearSearchHistory()
+                } label: {
+                    Label("Clear Search History", systemImage: "trash")
+                }
+            }
+        } header: {
+            Text("Search")
+        }
+    }
+
+    // MARK: - Account
+
+    private var accountSection: some View {
+        Section {
+            Button(role: .destructive) {
+                Task { await loginViewModel.logout() }
+            } label: {
+                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } header: {
+            Text("Account")
         }
     }
 }

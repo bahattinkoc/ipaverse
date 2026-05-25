@@ -156,10 +156,23 @@ struct SearchView: View {
 
     private var recentSearches: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recent Searches")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            HStack {
+                Text("Recent Searches")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button {
+                    viewModel.clearHistory()
+                } label: {
+                    Text("Clear")
+                        .font(.caption)
+                        .foregroundColor(.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {

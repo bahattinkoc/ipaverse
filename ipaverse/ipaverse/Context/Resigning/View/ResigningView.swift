@@ -26,7 +26,7 @@ struct ResigningView: View {
             Divider()
             footer
         }
-        .frame(width: 580, height: 560)
+        .frame(width: 580, height: 620)
         .onAppear { Task { await viewModel.load() } }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
@@ -183,61 +183,107 @@ struct ResigningView: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 12) {
+        VStack(spacing: 0) {
+            signingConfigSection
+            Divider()
+            actionRow
+        }
+    }
+
+    private var signingConfigSection: some View {
+        VStack(spacing: 10) {
+            // Provisioning Profile
+            HStack(spacing: 10) {
+                Label("Profile", systemImage: "seal")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(width: 90, alignment: .leading)
+
+                Button { viewModel.pickProvisioningProfile() } label: {
+                    HStack(spacing: 6) {
+                        if let url = viewModel.provisioningProfileURL {
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundColor(.green)
+                                .font(.caption)
+                            Text(url.deletingPathExtension().lastPathComponent)
+                                .lineLimit(1)
+                                .foregroundColor(.primary)
+                        } else {
+                            Text("Select a provisioning profile...")
+                                .foregroundColor(Color(NSColor.placeholderTextColor))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(7)
+                }
+                .buttonStyle(.plain)
+                .help("Select a provisioning profile (.mobileprovision)")
+            }
+
+            // Certificate
+            HStack(spacing: 10) {
+                Label("Certificate", systemImage: "person.badge.key")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(width: 90, alignment: .leading)
+
+                if certificates.isEmpty {
+                    Text("No signing certificates found")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Picker("", selection: $viewModel.selectedCertificate) {
+                        ForEach(viewModel.certificates) { cert in
+                            Text(cert.displayName).tag(Optional(cert))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 8) {
             if let msg = viewModel.signingMessage {
-                ProgressView()
-                    .scaleEffect(0.75)
+                ProgressView().scaleEffect(0.75)
                 Text(msg)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .lineLimit(1)
             }
 
             Spacer()
-
-            Button {
-                viewModel.pickProvisioningProfile()
-            } label: {
-                if let url = viewModel.provisioningProfileURL {
-                    Label(url.deletingPathExtension().lastPathComponent, systemImage: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                } else {
-                    Label("Select Profile", systemImage: "seal")
-                        .foregroundColor(.secondary)
-                }
-            }
-            .buttonStyle(.borderless)
-            .font(.caption)
-            .help("Select a provisioning profile (.mobileprovision)")
-
-            if certificates.isEmpty {
-                Text("No certificates found")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                Picker("", selection: $viewModel.selectedCertificate) {
-                    ForEach(viewModel.certificates) { cert in
-                        Text(cert.displayName)
-                            .tag(Optional(cert))
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 240)
-            }
 
             Button("Cancel") { dismiss() }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isSigning)
 
-            Button {
-                viewModel.initiateSign()
-            } label: {
+            Button { viewModel.initiateSign() } label: {
                 Label("Sign & Save", systemImage: "signature")
                     .fontWeight(.semibold)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(viewModel.selectedCertificate == nil || viewModel.provisioningProfileURL == nil || viewModel.isSigning)
+            .disabled(
+                viewModel.selectedCertificate == nil ||
+                viewModel.provisioningProfileURL == nil ||
+                viewModel.isSigning
+            )
         }
-        .padding()
+        .padding(.horizontal)
+        .padding(.vertical, 12)
     }
 
     private var certificates: [ResignerCertificate] { viewModel.certificates }

@@ -149,4 +149,9 @@ final class SearchVM: ObservableObject {
     func refreshSearchHistory() {
         loadSearchHistory()
     }
+
+    func clearHistory() {
+        UserDefaults.standard.removeObject(forKey: "SearchHistory")
+        searchHistory = []
+    }
 }
