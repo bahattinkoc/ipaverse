@@ -69,6 +69,10 @@ struct SavedProfile: Codable, Identifiable, Equatable {
         let letters = parts.compactMap(\.first)
         return letters.isEmpty ? String(email.prefix(2)).uppercased() : String(letters).uppercased()
     }
+
+    var countryCode: String? { StoreFrontCatalog.countryCode(for: storeFront) }
+    var flagEmoji: String? { StoreFrontCatalog.region(for: storeFront)?.flagEmoji }
+    var countryName: String? { StoreFrontCatalog.region(for: storeFront)?.name }
 }
 
 // MARK: - Login State

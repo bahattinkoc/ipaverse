@@ -68,8 +68,13 @@ struct SettingsView: View {
                     .environmentObject(loginViewModel)
             } label: {
                 LabeledContent {
-                    Text(regionName ?? "Not Set")
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        if let flag = currentRegion?.flagEmoji {
+                            Text(flag)
+                        }
+                        Text(regionName ?? "Not Set")
+                            .foregroundColor(.secondary)
+                    }
                 } label: {
                     Label("App Store Region", systemImage: "storefront")
                 }
@@ -85,10 +90,12 @@ struct SettingsView: View {
         return String(letters).uppercased()
     }
 
-    private var regionName: String? {
+    private var currentRegion: StoreFrontCatalog.Region? {
         guard let sf = loginViewModel.currentAccount?.storeFront else { return nil }
-        return appStoreStoreFronts[sf.components(separatedBy: "-").first ?? sf]
+        return StoreFrontCatalog.region(for: sf)
     }
+
+    private var regionName: String? { currentRegion?.name }
 
     // MARK: - Downloads
 
@@ -194,46 +201,45 @@ struct RegionPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
 
-    private var regions: [(code: String, name: String)] {
-        appStoreStoreFronts
-            .map { (code: $0.key, name: $0.value) }
-            .sorted { $0.name < $1.name }
-    }
+    private var regions: [StoreFrontCatalog.Region] { StoreFrontCatalog.allRegions }
 
-    private var filtered: [(code: String, name: String)] {
+    private var filtered: [StoreFrontCatalog.Region] {
         guard !searchText.isEmpty else { return regions }
         return regions.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
-    private var currentCode: String? {
+    private var currentStoreFrontID: String? {
         guard let sf = loginViewModel.currentAccount?.storeFront else { return nil }
         return sf.components(separatedBy: "-").first ?? sf
     }
 
-    private var defaultCountryName: String? {
+    private var defaultRegion: StoreFrontCatalog.Region? {
         guard let code = loginViewModel.originalStoreFrontCode else { return nil }
-        return appStoreStoreFronts[code]
+        return StoreFrontCatalog.region(for: code)
     }
 
     var body: some View {
-        List(filtered, id: \.code) { region in
+        List(filtered) { region in
             Button {
-                loginViewModel.changeStoreFront(region.code)
+                loginViewModel.changeStoreFront(region.storeFrontID)
                 dismiss()
             } label: {
                 HStack(spacing: 12) {
+                    Text(region.flagEmoji)
+                        .font(.system(size: 20))
+                        .frame(width: 28)
                     Text(region.name)
                         .foregroundColor(.primary)
                         .font(.body)
                     Spacer()
-                    if currentCode == region.code {
+                    if currentStoreFrontID == region.storeFrontID {
                         Image(systemName: "checkmark")
                             .foregroundColor(.accentColor)
                             .fontWeight(.semibold)
                             .font(.body)
                     }
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -249,7 +255,7 @@ struct RegionPickerView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.counterclockwise")
-                            Text(defaultCountryName.map { "Reset to \($0)" } ?? "Reset to Default")
+                            Text(defaultRegion.map { "Reset to \($0.name)" } ?? "Reset to Default")
                         }
                     }
                     .help("Restore your account's original App Store region")

@@ -354,6 +354,16 @@ struct AccountProfileCard: View {
                         .font(.system(size: 13))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+
+                    if let flag = profile.flagEmoji, let country = profile.countryName {
+                        HStack(spacing: 4) {
+                            Text(flag)
+                                .font(.system(size: 11))
+                            Text(country)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary.opacity(0.75))
+                        }
+                    }
                 }
 
                 Spacer()
