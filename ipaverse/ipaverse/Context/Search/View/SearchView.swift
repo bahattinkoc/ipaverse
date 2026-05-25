@@ -108,7 +108,7 @@ struct SearchView: View {
             }
         }
         .sheet(item: $viewModel.selectedDetailApp) { app in
-            AppDetailView(app: app, account: account)
+            AppDetailView(app: app, account: loginViewModel.currentAccount ?? account)
         }
     }
 

@@ -11,6 +11,7 @@ import AppKit
 
 struct DownloadedView: View {
     let account: Account
+    @EnvironmentObject private var loginViewModel: LoginVM
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
     @State private var isLoading = false
@@ -104,7 +105,7 @@ struct DownloadedView: View {
             loadDownloadedApps()
         }
         .sheet(item: $selectedApp) { app in
-            AppDetailView(app: app, account: account)
+            AppDetailView(app: app, account: loginViewModel.currentAccount ?? account)
         }
         .sheet(item: $appToSign) { app in
             ResigningView(downloadedApp: app)

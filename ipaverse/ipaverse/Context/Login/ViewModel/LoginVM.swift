@@ -141,6 +141,7 @@ final class LoginVM: ObservableObject {
     func logout(withMessage message: String? = nil) async {
         do {
             try await appStoreService.logout()
+            UserDefaults.standard.removeObject(forKey: "originalStoreFront")
 
             loginState = .idle
             resetForm()
@@ -281,6 +282,47 @@ extension LoginVM {
             return account
         }
         return nil
+    }
+
+    func changeStoreFront(_ storeFront: String) {
+        guard let account = currentAccount else { return }
+        if UserDefaults.standard.string(forKey: "originalStoreFront") == nil {
+            UserDefaults.standard.set(account.storeFront, forKey: "originalStoreFront")
+        }
+        applyStoreFront(storeFront, to: account)
+    }
+
+    func resetToDefaultStoreFront() {
+        guard let original = UserDefaults.standard.string(forKey: "originalStoreFront"),
+              let account = currentAccount else { return }
+        UserDefaults.standard.removeObject(forKey: "originalStoreFront")
+        applyStoreFront(original, to: account)
+    }
+
+    var isUsingCustomRegion: Bool {
+        guard let original = UserDefaults.standard.string(forKey: "originalStoreFront"),
+              let current = currentAccount?.storeFront else { return false }
+        return (original.components(separatedBy: "-").first ?? original) !=
+               (current.components(separatedBy: "-").first ?? current)
+    }
+
+    var originalStoreFrontCode: String? {
+        guard let sf = UserDefaults.standard.string(forKey: "originalStoreFront") else { return nil }
+        return sf.components(separatedBy: "-").first ?? sf
+    }
+
+    private func applyStoreFront(_ storeFront: String, to account: Account) {
+        let updated = Account(
+            email: account.email,
+            password: account.password,
+            name: account.name,
+            storeFront: storeFront,
+            passwordToken: account.passwordToken,
+            directoryServicesID: account.directoryServicesID,
+            pod: account.pod
+        )
+        try? keychainService.saveAccount(updated)
+        loginState = .success(updated)
     }
 
     var isLoginButtonEnabled: Bool {

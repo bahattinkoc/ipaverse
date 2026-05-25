@@ -28,6 +28,10 @@ final class SearchVM: ObservableObject {
     private let account: Account
     private var modelContext: ModelContext?
     private var loginViewModel: LoginVM?
+
+    private var effectiveAccount: Account {
+        loginViewModel?.currentAccount ?? account
+    }
     private var searchTask: Task<Void, Never>?
 
     init(account: Account) {
@@ -104,12 +108,13 @@ final class SearchVM: ObservableObject {
         searchTask = Task {
             do {
                 let service = AppStoreService()
+                let searchAccount = effectiveAccount
                 if isBundleID(trimmed) {
-                    let app = try await service.lookup(bundleID: trimmed, account: account, platform: selectedPlatform)
+                    let app = try await service.lookup(bundleID: trimmed, account: searchAccount, platform: selectedPlatform)
                     guard !Task.isCancelled else { return }
                     searchResults = [app]
                 } else {
-                    let result = try await service.search(term: trimmed, account: account, limit: 5, platform: selectedPlatform)
+                    let result = try await service.search(term: trimmed, account: searchAccount, limit: 5, platform: selectedPlatform)
                     guard !Task.isCancelled else { return }
                     searchResults = result.results ?? []
                 }
