@@ -170,10 +170,12 @@ final class AppStoreService: AppStoreServiceProtocol {
                 print("⚠️ Account keychain deletion error: \(status)")
             }
 
-            if let cookies = HTTPCookieStorage.shared.cookies {
-                for cookie in cookies {
-                    if cookie.domain.contains("apple.com") || cookie.domain.contains("itunes.com") {
-                        HTTPCookieStorage.shared.deleteCookie(cookie)
+            await MainActor.run {
+                if let cookies = HTTPCookieStorage.shared.cookies {
+                    for cookie in cookies {
+                        if cookie.domain.contains("apple.com") || cookie.domain.contains("itunes.com") {
+                            HTTPCookieStorage.shared.deleteCookie(cookie)
+                        }
                     }
                 }
             }
