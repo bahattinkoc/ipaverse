@@ -26,6 +26,10 @@ final class LoginVM: ObservableObject {
     @Published var hasEmailBeenEdited: Bool = false
     @Published var hasPasswordBeenEdited: Bool = false
 
+    @Published var savedProfiles: [SavedProfile] = []
+    @Published var showAccountPicker: Bool = false
+    @Published var editingProfile: SavedProfile? = nil
+
     // MARK: - SERVICES
 
     private let keychainService: KeychainServiceProtocol
@@ -42,6 +46,7 @@ final class LoginVM: ObservableObject {
         self.appStoreService = appStoreService
 
         setupBindings()
+        loadSavedProfiles()
         checkExistingLogin()
     }
 
@@ -69,11 +74,14 @@ final class LoginVM: ObservableObject {
 
             if rememberMe {
                 try keychainService.saveCredentials(credentials)
+                keychainService.saveProfilePassword(password, for: email)
             }
 
             try keychainService.saveAccount(account)
+            saveProfile(from: account)
 
             loginState = .success(account)
+            showAccountPicker = false
             saveUserEmail()
         } catch LoginError.twoFactorRequired {
             showAuthCodeField = true
@@ -99,6 +107,7 @@ final class LoginVM: ObservableObject {
         authCode = ""
         resetForm()
         loginState = .idle
+        showAccountPicker = !savedProfiles.isEmpty
     }
 
     func resendAuthCode() async {
@@ -138,6 +147,16 @@ final class LoginVM: ObservableObject {
         }
     }
 
+    func signOutCompletely() async {
+        for profile in savedProfiles {
+            keychainService.deleteProfilePassword(for: profile.email)
+        }
+        savedProfiles = []
+        UserDefaults.standard.removeObject(forKey: "savedProfiles")
+        try? keychainService.clearCredentials()
+        await logout()
+    }
+
     func logout(withMessage message: String? = nil) async {
         do {
             try await appStoreService.logout()
@@ -145,6 +164,8 @@ final class LoginVM: ObservableObject {
 
             loginState = .idle
             resetForm()
+
+            showAccountPicker = !savedProfiles.isEmpty
 
             if let message {
                 toastMessage = message
@@ -155,7 +176,75 @@ final class LoginVM: ObservableObject {
         }
     }
 
+    // MARK: - Saved Profiles
+
+    func loadSavedProfiles() {
+        guard let data = UserDefaults.standard.data(forKey: "savedProfiles"),
+              let profiles = try? JSONDecoder().decode([SavedProfile].self, from: data) else {
+            savedProfiles = []
+            return
+        }
+        savedProfiles = profiles
+    }
+
+    func quickLogin(profile: SavedProfile) async {
+        guard let savedPassword = keychainService.getProfilePassword(for: profile.email) else {
+            selectProfileForEditing(profile)
+            return
+        }
+
+        email = profile.email
+        password = savedPassword
+        await login()
+    }
+
+    func selectProfileForEditing(_ profile: SavedProfile) {
+        email = profile.email
+        password = keychainService.getProfilePassword(for: profile.email) ?? ""
+        editingProfile = profile
+        showAccountPicker = false
+        loginState = .idle
+    }
+
+    func deleteProfile(_ profile: SavedProfile) {
+        keychainService.deleteProfilePassword(for: profile.email)
+        savedProfiles.removeAll { $0.email == profile.email }
+        persistProfiles()
+        if savedProfiles.isEmpty {
+            showAccountPicker = false
+        }
+    }
+
+    func showNewLoginForm() {
+        resetForm()
+        showAccountPicker = false
+        loginState = .idle
+    }
+
+    func resetForm_public() {
+        resetForm()
+    }
+
     // MARK: - PRIVATE FUNCTIONS
+
+    private func saveProfile(from account: Account) {
+        let profile = SavedProfile(
+            email: account.email,
+            name: account.name,
+            storeFront: account.storeFront
+        )
+        if let index = savedProfiles.firstIndex(where: { $0.email == profile.email }) {
+            savedProfiles[index] = profile
+        } else {
+            savedProfiles.append(profile)
+        }
+        persistProfiles()
+    }
+
+    private func persistProfiles() {
+        guard let data = try? JSONEncoder().encode(savedProfiles) else { return }
+        UserDefaults.standard.set(data, forKey: "savedProfiles")
+    }
 
     private func saveUserEmail() {
         UserDefaults.standard.set(email, forKey: "lastEmail")
@@ -201,13 +290,16 @@ final class LoginVM: ObservableObject {
                         saveUserEmail()
                     } else {
                         loginState = .idle
+                        showAccountPicker = !savedProfiles.isEmpty
                     }
                 } catch {
                     loginState = .idle
+                    showAccountPicker = !savedProfiles.isEmpty
                 }
             }
         } else {
             loginState = .idle
+            showAccountPicker = !savedProfiles.isEmpty
         }
     }
 
@@ -258,6 +350,7 @@ final class LoginVM: ObservableObject {
         isPasswordValid = true
         hasEmailBeenEdited = false
         hasPasswordBeenEdited = false
+        editingProfile = nil
     }
 }
 

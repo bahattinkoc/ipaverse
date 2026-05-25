@@ -31,7 +31,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 460, height: 630)
+        .frame(width: 460, height: 660)
     }
 
     // MARK: - Profile
@@ -164,8 +164,20 @@ struct SettingsView: View {
 
     private var accountSection: some View {
         Section {
+            Button {
+                Task {
+                    dismiss()
+                    await loginViewModel.logout()
+                }
+            } label: {
+                Label("Add / Switch Account", systemImage: "person.2.circle")
+            }
+
             Button(role: .destructive) {
-                Task { await loginViewModel.logout() }
+                Task {
+                    dismiss()
+                    await loginViewModel.signOutCompletely()
+                }
             } label: {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }

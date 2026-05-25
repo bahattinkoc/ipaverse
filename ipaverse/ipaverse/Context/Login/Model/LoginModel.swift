@@ -55,6 +55,22 @@ struct Account: Codable, Equatable {
     }
 }
 
+// MARK: - Saved Profile
+
+struct SavedProfile: Codable, Identifiable, Equatable {
+    let email: String
+    let name: String
+    let storeFront: String
+
+    var id: String { email }
+
+    var initials: String {
+        let parts = name.split(separator: " ").prefix(2)
+        let letters = parts.compactMap(\.first)
+        return letters.isEmpty ? String(email.prefix(2)).uppercased() : String(letters).uppercased()
+    }
+}
+
 // MARK: - Login State
 enum LoginState: Equatable {
     case idle

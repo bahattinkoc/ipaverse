@@ -18,37 +18,22 @@ struct LoginView: View {
     var body: some View {
         VStack(spacing: 0) {
             if viewModel.showAuthCodeField {
-                HStack {
-                    Button(action: {
-                        viewModel.resetToLoginForm()
-                    }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 16, weight: .semibold))
-                            Text("Back")
-                                .font(.system(size: 14, weight: .medium))
-                        }
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.secondary.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.escape, modifiers: [])
-                    
-                    Spacer()
-                }
-                .padding(.horizontal, 32)
-                .padding(.top, 16)
+                backButton(action: { viewModel.resetToLoginForm() })
+            } else if !viewModel.showAccountPicker && !viewModel.savedProfiles.isEmpty {
+                backButton(action: {
+                    viewModel.resetForm_public()
+                    viewModel.showAccountPicker = true
+                })
             }
-            
+
             ScrollView {
                 VStack(spacing: 40) {
                     logoSection
 
                     if viewModel.showAuthCodeField {
                         twoFactorSection
+                    } else if viewModel.showAccountPicker {
+                        accountPickerSection
                     } else {
                         loginFormSection
                     }
@@ -61,17 +46,21 @@ struct LoginView: View {
                 .padding(.top, 24)
                 .padding(.bottom, 40)
             }
-            
-            VStack(spacing: 0) {
-                Divider()
-                    .opacity(0.3)
-                
-                loginButtonSection
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
-                    .background(.regularMaterial)
+
+            if !viewModel.showAccountPicker {
+                VStack(spacing: 0) {
+                    Divider()
+                        .opacity(0.3)
+
+                    loginButtonSection
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 24)
+                        .background(.regularMaterial)
+                }
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.showAccountPicker)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.showAuthCodeField)
         .toast(
             message: viewModel.toastMessage,
             isPresented: Binding(
@@ -81,32 +70,112 @@ struct LoginView: View {
         )
     }
 
-    private var logoSection: some View {
-        VStack(spacing: 20) {
-            LinearGradient(
-                colors: [.blue, .purple, .indigo],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .frame(width: 100, height: 100)
-            .mask(
-                Image("logo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            )
-            .shadow(color: .blue.opacity(0.3), radius: 20, x: 0, y: 10)
+    // MARK: - Back Button
+
+    private func backButton(action: @escaping () -> Void) -> some View {
+        HStack {
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Back")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.secondary.opacity(0.1))
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape, modifiers: [])
+
+            Spacer()
         }
+        .padding(.horizontal, 32)
+        .padding(.top, 16)
+    }
+
+    // MARK: - Logo
+
+    private var logoSection: some View {
+        LinearGradient(
+            colors: [.blue, .purple, .indigo],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .frame(width: 100, height: 100)
+        .mask(
+            Image("logo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        )
+        .shadow(color: .blue.opacity(0.3), radius: 20, x: 0, y: 10)
         .padding(.top, 20)
     }
 
-    private var loginFormSection: some View {
+    // MARK: - Account Picker
+
+    private var accountPickerSection: some View {
         VStack(spacing: 24) {
-            VStack(spacing: 16) {
+            VStack(spacing: 8) {
                 Text("Welcome Back")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
 
-                Text("Sign in to your Apple ID to continue")
+                Text("Choose an account to continue")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 10) {
+                ForEach(viewModel.savedProfiles) { profile in
+                    AccountProfileCard(profile: profile) {
+                        Task { await viewModel.quickLogin(profile: profile) }
+                    } onEdit: {
+                        viewModel.selectProfileForEditing(profile)
+                    } onDelete: {
+                        viewModel.deleteProfile(profile)
+                    }
+                }
+            }
+
+            Button {
+                viewModel.showNewLoginForm()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16))
+                    Text("Add Another Account")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundColor(.accentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.accentColor.opacity(0.08))
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Login Form
+
+    private var loginFormSection: some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 16) {
+                Text(viewModel.editingProfile != nil ? "Edit Account" : "Sign In")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+
+                Text(viewModel.editingProfile != nil
+                     ? "Update your credentials for \(viewModel.editingProfile!.email)"
+                     : "Sign in to your Apple ID to continue")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -121,6 +190,8 @@ struct LoginView: View {
                 isValid: !viewModel.hasEmailBeenEdited || viewModel.isEmailValid
             )
             .focused($focusedField, equals: .email)
+            .disabled(viewModel.editingProfile != nil)
+            .opacity(viewModel.editingProfile != nil ? 0.7 : 1)
 
             ModernSecureTextField(
                 title: "Password",
@@ -139,9 +210,13 @@ struct LoginView: View {
             .padding(.top, 8)
         }
         .task {
-            viewModel.loadUserEmail()
+            if viewModel.editingProfile == nil && viewModel.savedProfiles.isEmpty {
+                viewModel.loadUserEmail()
+            }
         }
     }
+
+    // MARK: - Two Factor
 
     private var twoFactorSection: some View {
         VStack(spacing: 24) {
@@ -169,6 +244,8 @@ struct LoginView: View {
         .padding(.vertical, 8)
     }
 
+    // MARK: - Error
+
     private var errorMessageView: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -189,6 +266,8 @@ struct LoginView: View {
                 .stroke(Color.red.opacity(0.3), lineWidth: 1)
         )
     }
+
+    // MARK: - Login Button
 
     private var loginButtonSection: some View {
         VStack(spacing: 20) {
@@ -223,5 +302,86 @@ struct LoginView: View {
             .frame(height: 56)
         }
         .padding(.top, 8)
+    }
+}
+
+// MARK: - Account Profile Card
+
+struct AccountProfileCard: View {
+    let profile: SavedProfile
+    let onSelect: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.12))
+                        .frame(width: 46, height: 46)
+                    Text(profile.initials)
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundColor(.accentColor)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(profile.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    Text(profile.email)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.secondary.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit account")
+
+                    Button(action: onDelete) {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.red.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove account")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                onEdit()
+            } label: {
+                Label("Edit Account", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Remove Account", systemImage: "trash")
+            }
+        }
     }
 }

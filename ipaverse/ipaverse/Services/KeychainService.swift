@@ -14,6 +14,9 @@ protocol KeychainServiceProtocol {
     func clearCredentials() throws
     func saveAccount(_ account: Account) throws
     func getAccount() -> Account?
+    func saveProfilePassword(_ password: String, for email: String)
+    func getProfilePassword(for email: String) -> String?
+    func deleteProfilePassword(for email: String)
 }
 
 final class KeychainService: KeychainServiceProtocol {
@@ -106,6 +109,44 @@ final class KeychainService: KeychainServiceProtocol {
         }
 
         return account
+    }
+
+    // MARK: - Profile Password Management
+
+    func saveProfilePassword(_ password: String, for email: String) {
+        guard let data = password.data(using: .utf8) else { return }
+        let key = "ipaverse.profile.\(email)"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    func getProfilePassword(for email: String) -> String? {
+        let key = "ipaverse.profile.\(email)"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func deleteProfilePassword(for email: String) {
+        let key = "ipaverse.profile.\(email)"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 
