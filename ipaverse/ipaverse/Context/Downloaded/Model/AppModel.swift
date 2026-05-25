@@ -56,12 +56,13 @@ final class DownloadedApp {
     var downloadDate: Date
     var filePath: String
 
-    init(app: AppStoreApp, downloadDate: Date = Date(), filePath: String) {
-        self.id = "\(app.id ?? 0)_\(app.bundleID ?? "")_\(app.version ?? "")"
+    init(app: AppStoreApp, downloadDate: Date = Date(), filePath: String, versionOverride: String? = nil) {
+        let resolvedVersion = versionOverride ?? app.version ?? ""
+        self.id = "\(app.id ?? 0)_\(app.bundleID ?? "")_\(resolvedVersion)"
         self.appId = app.id ?? 0
         self.bundleID = app.bundleID ?? ""
         self.name = app.name ?? ""
-        self.version = app.version ?? ""
+        self.version = resolvedVersion
         self.price = app.price ?? 0.0
         self.iconURL = app.iconURL
         self.platform = app.platform?.rawValue

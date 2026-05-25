@@ -18,7 +18,7 @@ protocol AppStoreServiceProtocol {
     func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
     func lookup(bundleID: String, account: Account, platform: AppPlatform) async throws -> AppStoreApp
     func purchase(app: AppStoreApp, account: Account) async throws
-    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
+    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String?, downloadedVersion: String?, progress: ((Double, Int64, Int64) -> Void)?, modelContext: ModelContext?) async throws -> DownloadOutput
     func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput
 }
 
@@ -371,7 +371,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Download
-    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
+    func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, downloadedVersion: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
         var purchased = false
 
         do {
@@ -401,9 +401,9 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         if result.success, let modelContext {
             if await findExistingDownloadedApp(app: app, context: modelContext) != nil {
-                await updateDownloadedApp(app: app, newFilePath: result.destinationPath, context: modelContext)
+                await updateDownloadedApp(app: app, newFilePath: result.destinationPath, downloadedVersion: downloadedVersion, context: modelContext)
             } else {
-                await saveDownloadedApp(app: app, filePath: result.destinationPath, context: modelContext)
+                await saveDownloadedApp(app: app, filePath: result.destinationPath, downloadedVersion: downloadedVersion, context: modelContext)
             }
         }
 
@@ -1007,9 +1007,9 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     @MainActor
-    private func saveDownloadedApp(app: AppStoreApp, filePath: String, context: ModelContext) async {
+    private func saveDownloadedApp(app: AppStoreApp, filePath: String, downloadedVersion: String? = nil, context: ModelContext) async {
         do {
-            let downloadedApp = DownloadedApp(app: app, filePath: filePath)
+            let downloadedApp = DownloadedApp(app: app, filePath: filePath, versionOverride: downloadedVersion)
             context.insert(downloadedApp)
             try context.save()
         } catch {
@@ -1035,7 +1035,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     @MainActor
-    private func updateDownloadedApp(app: AppStoreApp, newFilePath: String, context: ModelContext) async {
+    private func updateDownloadedApp(app: AppStoreApp, newFilePath: String, downloadedVersion: String? = nil, context: ModelContext) async {
         do {
             let descriptor = FetchDescriptor<DownloadedApp>(
                 predicate: #Predicate<DownloadedApp> { downloadedApp in
@@ -1046,6 +1046,10 @@ final class AppStoreService: AppStoreServiceProtocol {
             let existingApps = try context.fetch(descriptor)
             if let existingApp = existingApps.first {
                 existingApp.filePath = newFilePath
+                if let version = downloadedVersion {
+                    existingApp.version = version
+                    existingApp.downloadDate = Date()
+                }
                 try context.save()
             }
         } catch {

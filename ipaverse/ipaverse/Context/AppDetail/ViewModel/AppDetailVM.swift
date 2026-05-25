@@ -152,6 +152,7 @@ final class AppDetailVM: ObservableObject {
                     account: account,
                     outputPath: url.path,
                     externalVersionId: selectedVersionId,
+                    downloadedVersion: selectedDisplayVersion,
                     progress: { progress, bytesWritten, totalBytes in
                         Task { @MainActor in
                             self.downloadState = .downloading(
