@@ -6,11 +6,11 @@
 //
 
 import SwiftUI
-import AppKit
+@preconcurrency import AppKit
 
 // MARK: - PlistEntry
 
-struct PlistEntry: Identifiable {
+struct PlistEntry: Identifiable, @unchecked Sendable {
     var id = UUID()
     var key: String
     var editValue: String
@@ -124,16 +124,18 @@ final class ResigningVM: ObservableObject {
         state = .loading
         let ipaPath = downloadedApp.filePath
 
-        async let certs = Task.detached { try? IPAResigner.listCertificates() }.value
-        async let plist = Task.detached { try? IPAResigner.loadInfoPlist(ipaPath: ipaPath) }.value
-        async let tree = Task.detached { try? IPAResigner.buildFileTree(ipaPath: ipaPath) }.value
+        let (certs, entries, tree) = await Task.detached {
+            let certs = (try? IPAResigner.listCertificates()) ?? []
+            let rawPlist = (try? IPAResigner.loadInfoPlist(ipaPath: ipaPath)) ?? [:]
+            let entries = PlistEntry.entries(from: rawPlist)
+            let tree = (try? IPAResigner.buildFileTree(ipaPath: ipaPath)) ?? []
+            return (certs, entries, tree)
+        }.value
 
-        let (c, p, t) = await (certs, plist, tree)
-
-        certificates = c ?? []
+        certificates = certs
         selectedCertificate = certificates.first(where: { $0.isDevelopment }) ?? certificates.first
-        plistEntries = PlistEntry.entries(from: p ?? [:])
-        fileTree = t ?? []
+        plistEntries = entries
+        fileTree = tree
         state = .idle
     }
 
@@ -216,28 +218,25 @@ final class ResigningVM: ObservableObject {
     }
 
     private func performSign(certificate: ResignerCertificate, outputPath: String) {
-        let plistEdits = Dictionary(uniqueKeysWithValues: plistEntries
-            .filter { $0.isEditable }
-            .map { ($0.key, $0.toAny()) }
+        let config = ResignConfig(
+            certificate: certificate,
+            plistEdits: Dictionary(uniqueKeysWithValues: plistEntries
+                .filter { $0.isEditable }
+                .map { ($0.key, $0.toAny()) }
+            ),
+            fileReplacements: fileReplacements,
+            provisioningProfileURL: provisioningProfileURL
         )
-        let replacements = fileReplacements
         let ipaPath = downloadedApp.filePath
-        let profileURL = provisioningProfileURL
 
-        Task.detached { [weak self] in
-            let config = ResignConfig(
-                certificate: certificate,
-                plistEdits: plistEdits,
-                fileReplacements: replacements,
-                provisioningProfileURL: profileURL
-            )
+        Task.detached { [self] in
             do {
                 try IPAResigner().sign(ipaPath: ipaPath, config: config, outputPath: outputPath) { message in
-                    Task { @MainActor in self?.state = .signing(message: message) }
+                    Task { @MainActor [self] in self.state = .signing(message: message) }
                 }
-                await MainActor.run { self?.state = .idle }
+                await MainActor.run { self.state = .idle }
             } catch {
-                await MainActor.run { self?.state = .error(error.localizedDescription) }
+                await MainActor.run { self.state = .error(error.localizedDescription) }
             }
         }
     }

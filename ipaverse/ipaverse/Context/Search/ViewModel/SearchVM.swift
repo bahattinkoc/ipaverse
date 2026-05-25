@@ -28,6 +28,7 @@ final class SearchVM: ObservableObject {
     private let account: Account
     private var modelContext: ModelContext?
     private var loginViewModel: LoginVM?
+    private var searchTask: Task<Void, Never>?
 
     init(account: Account) {
         self.account = account
@@ -99,19 +100,23 @@ final class SearchVM: ObservableObject {
 
         if !isBundleID(trimmed) { saveSearchHistory() }
 
-        Task {
+        searchTask?.cancel()
+        searchTask = Task {
             do {
                 let service = AppStoreService()
                 if isBundleID(trimmed) {
                     let app = try await service.lookup(bundleID: trimmed, account: account, platform: selectedPlatform)
+                    guard !Task.isCancelled else { return }
                     searchResults = [app]
                 } else {
                     let result = try await service.search(term: trimmed, account: account, limit: 5, platform: selectedPlatform)
+                    guard !Task.isCancelled else { return }
                     searchResults = result.results ?? []
                 }
                 isLoading = false
                 isSearching = false
             } catch {
+                guard !Task.isCancelled else { return }
                 let msg = isBundleID(trimmed)
                     ? "App not found: \(trimmed)"
                     : "Search failed: \(error.localizedDescription)"
@@ -123,9 +128,13 @@ final class SearchVM: ObservableObject {
     }
 
     func clearSearch() {
+        searchTask?.cancel()
+        searchTask = nil
         searchText = ""
         searchResults = []
         errorMessage = nil
+        isLoading = false
+        isSearching = false
     }
 
     func selectSearchTerm(_ term: String) {

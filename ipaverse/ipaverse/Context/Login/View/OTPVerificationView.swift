@@ -12,18 +12,24 @@ struct OTPVerificationView: View {
     @FocusState private var isKeyboardShowing: Bool
 
     var body: some View {
+        let chars = Array(otpText)
         HStack(spacing: 12) {
             ForEach(0..<6, id: \.self) { index in
-                OTPTextBox(index)
+                OTPTextBox(index, chars: chars)
             }
         }
         .background {
-            TextField("", text: $otpText.limit(6))
+            TextField("", text: $otpText)
                 .textContentType(.oneTimeCode)
                 .frame(width: 1, height: 1)
                 .opacity(0.001)
                 .blendMode(.screen)
                 .focused($isKeyboardShowing)
+                .onChange(of: otpText) { _, newValue in
+                    if newValue.count > 6 {
+                        otpText = String(newValue.prefix(6))
+                    }
+                }
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -32,13 +38,10 @@ struct OTPVerificationView: View {
     }
 
     @ViewBuilder
-    func OTPTextBox(_ index: Int) -> some View {
+    func OTPTextBox(_ index: Int, chars: [Character]) -> some View {
         ZStack {
-            if otpText.count > index {
-                let startIndex = otpText.startIndex
-                let charIndex = otpText.index(startIndex, offsetBy: index)
-                let charToString = String(otpText[charIndex])
-                Text(charToString)
+            if chars.count > index {
+                Text(String(chars[index]))
                     .font(.system(size: 20, weight: .bold, design: .monospaced))
                     .foregroundColor(.primary)
             } else {
@@ -58,16 +61,5 @@ struct OTPVerificationView: View {
                 .animation(.easeInOut(duration: 0.2), value: isKeyboardShowing)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-extension Binding where Value == String {
-    func limit(_ length: Int) -> Self {
-        if wrappedValue.count > length {
-            DispatchQueue.main.async {
-                self.wrappedValue = String(self.wrappedValue.prefix(length))
-            }
-        }
-        return self
     }
 }

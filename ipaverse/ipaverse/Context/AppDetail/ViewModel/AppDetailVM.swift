@@ -84,9 +84,11 @@ final class AppDetailVM: ObservableObject {
     }
 
     private func fetchDisplayNames(service: AppStoreService) async {
-        guard case .loaded(let versions) = versionsState else { return }
+        guard case .loaded(let initialVersions) = versionsState else { return }
         let app = self.app
         let account = self.account
+
+        var versions = initialVersions
 
         await withTaskGroup(of: (String, VersionDisplayInfo?).self) { group in
             for version in versions {
@@ -100,11 +102,10 @@ final class AppDetailVM: ObservableObject {
 
             for await (id, info) in group {
                 guard let info,
-                      case .loaded(var current) = self.versionsState,
-                      let index = current.firstIndex(where: { $0.id == id }) else { continue }
-                current[index].displayVersion = info.versionString
-                current[index].releaseDate = info.releaseDate
-                self.versionsState = .loaded(current)
+                      let index = versions.firstIndex(where: { $0.id == id }) else { continue }
+                versions[index].displayVersion = info.versionString
+                versions[index].releaseDate = info.releaseDate
+                versionsState = .loaded(versions)
             }
         }
     }
@@ -119,20 +120,17 @@ final class AppDetailVM: ObservableObject {
         savePanel.title = "Save App File"
         savePanel.canCreateDirectories = true
 
-        let downloadType = getDownloadTypeFromSettings()
-        let fileExtension = downloadType.rawValue
+        let settings = UserDefaults.standard.data(forKey: "UserSettings")
+            .flatMap { try? JSONDecoder().decode(SettingsModel.self, from: $0) }
+        let fileExtension = (settings?.defaultDownloadType ?? .ipa).rawValue
         let versionLabel = selectedDisplayVersion ?? app.version ?? ""
-        let fileName = "\(app.bundleID ?? "")_\(versionLabel).\(fileExtension)"
-        savePanel.nameFieldStringValue = fileName
+        savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(versionLabel).\(fileExtension)"
 
         if let contentType = UTType(filenameExtension: fileExtension) {
             savePanel.allowedContentTypes = [contentType]
         }
-
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data),
-           !settings.defaultDownloadPath.isEmpty {
-            savePanel.directoryURL = URL(fileURLWithPath: settings.defaultDownloadPath)
+        if let path = settings?.defaultDownloadPath, !path.isEmpty {
+            savePanel.directoryURL = URL(fileURLWithPath: path)
         }
 
         savePanel.begin { [weak self] response in
@@ -184,11 +182,4 @@ final class AppDetailVM: ObservableObject {
         }
     }
 
-    private func getDownloadTypeFromSettings() -> DownloadType {
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let settings = try? JSONDecoder().decode(SettingsModel.self, from: data) {
-            return settings.defaultDownloadType
-        }
-        return .ipa
-    }
 }

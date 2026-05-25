@@ -9,7 +9,7 @@ import Foundation
 
 // MARK: - Models
 
-struct ResignerCertificate: Identifiable, Hashable {
+struct ResignerCertificate: Identifiable, Hashable, Sendable {
     let id: String    // SHA1 hash — used as -s argument to codesign
     let name: String  // "Apple Development: Ad Soyad (TEAMID)"
 
@@ -32,14 +32,14 @@ struct ResignerCertificate: Identifiable, Hashable {
     }
 }
 
-struct ResignConfig {
+struct ResignConfig: @unchecked Sendable {
     let certificate: ResignerCertificate
     let plistEdits: [String: Any]
     let fileReplacements: [String: Data]
     let provisioningProfileURL: URL?
 }
 
-struct IPAFileNode: Identifiable {
+struct IPAFileNode: Identifiable, Sendable {
     let id: String   // = path (IPA içindeki relative path)
     let name: String
     let path: String
