@@ -637,7 +637,7 @@ final class AppStoreService: AppStoreServiceProtocol {
             }
         }
 
-        // Kalan buffer'ı yaz
+        // Write remaining buffer
         if !buffer.isEmpty {
             try fileHandle.write(contentsOf: buffer)
             downloadedBytes += Int64(buffer.count)

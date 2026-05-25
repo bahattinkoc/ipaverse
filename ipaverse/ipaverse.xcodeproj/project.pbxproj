@@ -40,6 +40,7 @@
 			children = (
 				6B87C4852E42B9450094874D /* ipaverse */,
 				6B87C4842E42B9450094874D /* Products */,
+				6BDA00902FC323C000AAEA22 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -49,6 +50,14 @@
 				6B87C4832E42B9450094874D /* ipaverse.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6BDA00902FC323C000AAEA22 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				6B87C4A02E42B9470094874D /* libz.tbd */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -283,7 +292,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = ipaverse/ipaverse-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "ipaverse/ipaverse-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -316,7 +325,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = ipaverse/ipaverse-Bridging-Header.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "ipaverse/ipaverse-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
 
 struct DownloadedView: View {
     let account: Account
@@ -15,6 +16,7 @@ struct DownloadedView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedApp: AppStoreApp?
+    @State private var appToSign: DownloadedApp?
 
     var body: some View {
         NavigationStack {
@@ -67,6 +69,29 @@ struct DownloadedView: View {
                         ) {
                             openDetailSheet(for: downloadedApp)
                         }
+                        .contextMenu {
+                            Button {
+                                NSWorkspace.shared.activateFileViewerSelecting(
+                                    [URL(fileURLWithPath: downloadedApp.filePath)]
+                                )
+                            } label: {
+                                Label("Show in Finder", systemImage: "folder")
+                            }
+
+                            Button {
+                                appToSign = downloadedApp
+                            } label: {
+                                Label("Edit & Sign", systemImage: "signature")
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                modelContext.delete(downloadedApp)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                     .refreshable {
                         loadDownloadedApps()
@@ -80,6 +105,9 @@ struct DownloadedView: View {
         }
         .sheet(item: $selectedApp) { app in
             AppDetailView(app: app, account: account)
+        }
+        .sheet(item: $appToSign) { app in
+            ResigningView(downloadedApp: app)
         }
     }
 
