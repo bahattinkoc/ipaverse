@@ -254,13 +254,34 @@ struct ResigningView: View {
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    Picker("", selection: $viewModel.selectedCertificate) {
+                    Menu {
                         ForEach(viewModel.certificates) { cert in
-                            Text(cert.displayName).tag(Optional(cert))
+                            Button(cert.displayName) {
+                                viewModel.selectedCertificate = cert
+                            }
                         }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if let cert = viewModel.selectedCertificate {
+                                Text(cert.displayName)
+                                    .lineLimit(1)
+                                    .foregroundColor(.primary)
+                            } else {
+                                Text("Select a certificate...")
+                                    .foregroundColor(Color(NSColor.placeholderTextColor))
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(7)
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.plain)
                 }
             }
         }
