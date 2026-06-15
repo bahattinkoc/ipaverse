@@ -12,12 +12,13 @@
 
 ## Features
 
-- Search the App Store and download IPA files
-- Browse full version history for any app
-- Re-sign IPAs with your own developer certificate
-- Install directly to a connected iPhone/iPad over USB
-- Manage multiple Apple IDs with Keychain storage
-- Switch storefronts across regions
+- Download App Store IPAs without Terminal
+- Browse and archive historical app versions
+- Re-sign DRM-free IPAs with your own certificate
+- Install directly to connected iPhone/iPad
+- Manage multiple Apple IDs securely via Keychain
+- Switch App Store storefronts by region
+- Built entirely with SwiftUI for macOS
 
 > **Note:** Re-signing and installation only works with DRM-free IPAs. Most free apps qualify — paid apps are typically FairPlay-encrypted.
 
@@ -60,6 +61,30 @@ git clone https://github.com/bahattinkoc/ipaverse.git
 cd ipaverse
 open ipaverse.xcodeproj
 ```
+
+---
+
+## What works / What does not work
+
+| Supported | Not supported |
+|---|---|
+| DRM-free apps | FairPlay-encrypted paid apps |
+| App Store search | Pirated / cracked IPAs |
+| Version history | DRM bypass |
+| Re-signing own apps | App Store policy circumvention |
+
+---
+
+## Security & Privacy
+
+ipaverse runs locally on your Mac.
+
+- Apple ID credentials are stored in macOS Keychain.
+- Authentication uses Apple's GrandSlam flow.
+- Passwords are not transmitted directly; SRP-6a challenge/response is used.
+- Anisette headers are generated locally using Apple frameworks.
+- No external anisette server is required.
+- ipaverse does not upload your Apple ID, password, certificates, provisioning profiles, or IPA files to any third-party server.
 
 ---
 
