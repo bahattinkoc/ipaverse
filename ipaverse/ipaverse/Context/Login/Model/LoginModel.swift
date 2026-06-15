@@ -99,7 +99,7 @@ enum LoginState: Equatable {
 enum LoginError: LocalizedError, Equatable {
     case invalidCredentials
     case networkError
-    case twoFactorRequired
+    case twoFactorRequired(maskedPhone: String?)
     case invalidAuthCode
     case accountLocked
     case tokenExpired

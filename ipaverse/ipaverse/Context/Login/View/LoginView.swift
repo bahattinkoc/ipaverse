@@ -225,23 +225,41 @@ struct LoginView: View {
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundColor(.primary)
 
-                Text("Apple sent a 6-digit verification code to your trusted devices.")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                if let phone = viewModel.twoFactorPhoneHint {
+                    Text("Apple sent a 6-digit verification code by text message to:")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
 
-                HStack(spacing: 6) {
-                    Image(systemName: "iphone")
-                    Image(systemName: "ipad")
-                    Image(systemName: "laptopcomputer")
+                    HStack(spacing: 8) {
+                        Image(systemName: "message.fill")
+                        Text(phone)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(.primary)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 16)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(10)
+                } else {
+                    Text("Apple sent a 6-digit verification code to your trusted devices.")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "iphone")
+                        Image(systemName: "ipad")
+                        Image(systemName: "laptopcomputer")
+                    }
+                    .font(.system(size: 18))
+                    .foregroundColor(.secondary.opacity(0.6))
+
+                    Text("Check your iPhone, iPad, or Mac for a notification from Apple.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary.opacity(0.8))
+                        .multilineTextAlignment(.center)
                 }
-                .font(.system(size: 18))
-                .foregroundColor(.secondary.opacity(0.6))
-
-                Text("Check your iPhone, iPad, or Mac for a notification from Apple.")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary.opacity(0.8))
-                    .multilineTextAlignment(.center)
             }
             .padding(.bottom, 4)
 
@@ -252,6 +270,12 @@ struct LoginView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 OTPVerificationView(otpText: $viewModel.authCode)
+                    .onChange(of: viewModel.authCode) { _, newValue in
+                        // Auto-submit once the full 6-digit code is entered.
+                        if newValue.count == 6 && !viewModel.isLoading {
+                            Task { await viewModel.handle2FA(newValue) }
+                        }
+                    }
 
                 Text("Didn't receive a code? Use the Resend button below.")
                     .font(.system(size: 12))

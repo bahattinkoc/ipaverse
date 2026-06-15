@@ -19,6 +19,7 @@ final class LoginVM: ObservableObject {
     @Published var authCode: String = ""
     @Published var rememberMe: Bool = true
     @Published var showAuthCodeField: Bool = false
+    @Published var twoFactorPhoneHint: String? = nil
     @Published var errorMessage: String = ""
     @Published var toastMessage: String = ""
     @Published var isEmailValid: Bool = true
@@ -83,9 +84,10 @@ final class LoginVM: ObservableObject {
             loginState = .success(account)
             showAccountPicker = false
             saveUserEmail()
-        } catch LoginError.twoFactorRequired {
+        } catch LoginError.twoFactorRequired(let maskedPhone) {
             showAuthCodeField = true
             loginState = .requires2FA
+            twoFactorPhoneHint = maskedPhone
             errorMessage = ""
 
         } catch LoginError.invalidAuthCode {
@@ -137,11 +139,13 @@ final class LoginVM: ObservableObject {
 
             loginState = .success(account)
             saveUserEmail()
-        } catch LoginError.twoFactorRequired {
+        } catch LoginError.twoFactorRequired(let maskedPhone) {
             showAuthCodeField = true
             loginState = .requires2FA
+            twoFactorPhoneHint = maskedPhone
             errorMessage = ""
-            toastMessage = "A new verification code was sent to your trusted devices."
+            toastMessage = maskedPhone.map { "A new verification code was sent to \($0)." }
+                ?? "A new verification code was sent to your trusted devices."
 
         } catch LoginError.invalidCredentials {
             loginState = .error("Invalid Apple ID or password")
@@ -351,6 +355,7 @@ final class LoginVM: ObservableObject {
         authCode = ""
         rememberMe = true
         showAuthCodeField = false
+        twoFactorPhoneHint = nil
         errorMessage = ""
         isEmailValid = true
         isPasswordValid = true

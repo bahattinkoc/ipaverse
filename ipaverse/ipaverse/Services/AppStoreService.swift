@@ -29,6 +29,11 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     let sessionDelegate: AppStoreURLSessionDelegate
 
+    /// GrandSlam 2FA context from a verification-pending handshake, used to validate
+    /// the code the user subsequently enters. `phoneId` is set when the code is
+    /// delivered via SMS (no trusted device).
+    private var pendingGSATwoFactor: (identityToken: String, phoneId: Int?)?
+
     init(session: URLSession = .shared) {
         let config = URLSessionConfiguration.default
         config.httpCookieAcceptPolicy = .always
@@ -42,98 +47,119 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Login
+    //
+    // Apple deprecated the legacy MZFinance username/password authenticate endpoint
+    // (now returns 403). Auth now goes through GrandSlam (GSA) — an SRP-6a handshake
+    // against gsa.apple.com with native anisette headers. See GSAClient.
     func login(credentials: LoginCredentials) async throws -> Account {
-        let deviceID = try await getDeviceIdentifier()
-        var bag = try await fetchBag(deviceID: deviceID)
-        var redirect = ""
-        var attempt = 1
-        let maxAttempts = 4
-
-        while attempt <= maxAttempts {
-            let urlString = redirect.isEmpty ? bag : redirect
-            let loginRequest = try createLoginRequest(
-                credentials: credentials,
-                deviceID: deviceID,
-                attempt: attempt,
-                url: urlString
-            )
-
-            logger.logRequest(loginRequest)
-            let (data, response) = try await session.data(for: loginRequest)
-            logger.logResponse(response, data: data, error: nil)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw LoginError.networkError
-            }
-
-            let parseResult = try parseLoginResponse(
-                data: data,
-                statusCode: httpResponse.statusCode,
-                attempt: attempt,
-                authCode: credentials.authCode,
-                httpResponse: httpResponse
-            )
-
-            if parseResult.shouldRetry {
-                if let redirectURL = parseResult.redirectURL {
-                    redirect = redirectURL
-                } else {
-                    // Transient server error — re-fetch bag to get a fresh session context
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    bag = try await fetchBag(deviceID: deviceID)
-                    redirect = ""
+        let gsa = GSAClient(session: session)
+        let submittingCode = credentials.authCode != nil
+        do {
+            // If the user just entered a 2FA code, validate it against the pending
+            // GrandSlam identity before re-running the handshake (now trusted).
+            if let code = credentials.authCode, let pending = pendingGSATwoFactor {
+                do {
+                    try await gsa.submitTwoFactorCode(code, identityToken: pending.identityToken, phoneId: pending.phoneId)
+                } catch {
+                    throw LoginError.invalidAuthCode
                 }
-                attempt += 1
-                continue
+                pendingGSATwoFactor = nil
             }
 
-            let account = Account(
-                email: credentials.email,
-                password: credentials.password,
-                name: parseResult.accountName ?? "",
-                storeFront: parseResult.storeFront ?? "",
-                passwordToken: parseResult.passwordToken ?? "",
-                directoryServicesID: parseResult.directoryServicesID ?? "",
-                pod: parseResult.pod
+            let gsaAccount = try await gsa.authenticate(
+                username: credentials.email,
+                password: credentials.password
             )
-
-            return account
+            print("🔐 [GSA] handshake OK — dsid set: \(!gsaAccount.dsid.isEmpty), idmsToken set: \(!gsaAccount.idmsToken.isEmpty)")
+            return try await bridgeToAppStore(gsa: gsaAccount, credentials: credentials)
+        } catch let GSAError.needsTwoFactor(identity, phoneId, maskedPhone) {
+            pendingGSATwoFactor = (identity, phoneId)
+            // If we already submitted a code and 2FA is still required, the code
+            // was wrong/expired — prompt again rather than claiming success.
+            throw submittingCode ? LoginError.invalidAuthCode : LoginError.twoFactorRequired(maskedPhone: maskedPhone)
+        } catch GSAError.anisetteUnavailable {
+            throw LoginError.unknownError("Could not generate anisette data on this Mac.")
+        } catch let GSAError.serverError(code, message) {
+            // Apple GSA error codes for bad credentials.
+            if code == -20101 || code == -22406 || code == -36607 {
+                throw LoginError.invalidCredentials
+            }
+            throw LoginError.unknownError("GSA \(code): \(message)")
         }
-
-        throw LoginError.unknownError("Too many attempts were made.")
     }
 
-    private func fetchBag(deviceID: String) async throws -> String {
-        let urlString = "https://\(Constant.privateInitDomain)\(Constant.privateInitPath)?guid=\(deviceID)"
-        guard let url = URL(string: urlString) else {
-            throw LoginError.networkError
+    /// Exchanges a successful GrandSlam identity for the App Store credentials
+    /// (passwordToken / DSID / storeFront) that the download endpoints require.
+    ///
+    /// NOTE: this bridge is the remaining unsolved step. For now it surfaces the
+    /// decrypted `spd` keys so the real exchange can be implemented from live data.
+    private func bridgeToAppStore(gsa: GSAAccountData, credentials: LoginCredentials) async throws -> Account {
+        // Diagnostic dump of the decrypted spd structure (types/lengths only — no
+        // token bytes or personal data) to drive the App Store token bridge design.
+        print("🔐 [GSA] ----- spd structure -----")
+        for key in gsa.raw.keys.sorted() {
+            let value = gsa.raw[key]!
+            switch value {
+            case let s as String:
+                print("   \(key): String(len \(s.count))")
+            case let d as Data:
+                print("   \(key): Data(len \(d.count))")
+            case let dict as [String: Any]:
+                print("   \(key): Dict keys=\(dict.keys.sorted())")
+            case let arr as [Any]:
+                print("   \(key): Array(count \(arr.count))")
+            case let n as NSNumber:
+                print("   \(key): Number(\(n))")
+            default:
+                print("   \(key): \(type(of: value))")
+            }
         }
+        print("🔐 [GSA] dsid(adsid)=\(gsa.dsid)  DsPrsId present=\(gsa.raw["DsPrsId"] != nil)")
+        print("🔐 [GSA] ---------------------------")
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("application/xml", forHTTPHeaderField: "Accept")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-
-        logger.logRequest(request)
-        let (data, response) = try await session.data(for: request)
-        logger.logResponse(response, data: data, error: nil)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw LoginError.networkError
+        // Bridge: use the password-equivalent token (PET) from the GrandSlam token
+        // table as the "password" for the MZFinance authenticate endpoint. The PET
+        // already encodes the GSA (2FA) authentication, so the store returns a
+        // passwordToken / DSID / storeFront without rejecting it like a raw password.
+        guard let tokens = gsa.raw["t"] as? [String: Any],
+              let petEntry = tokens["com.apple.gs.idms.pet"] as? [String: Any],
+              let pet = petEntry["token"] as? String, !pet.isEmpty else {
+            throw LoginError.unknownError("GSA OK but PET token (com.apple.gs.idms.pet) not found in spd")
         }
+        print("🔐 [GSA] PET token len=\(pet.count) — authenticating to MZFinance with PET")
 
-        let normalizedData = normalizePlistData(data)
-        guard let plist = try? PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any] else {
-            throw LoginError.unknownError("Failed to parse bag response")
-        }
+        let deviceID = try await getDeviceIdentifier()
+        let parsed = try await authenticateMZFinance(email: credentials.email, password: pet, deviceID: deviceID)
 
-        guard let urlBag = plist["urlBag"] as? [String: Any],
-              let authenticateAccount = urlBag["authenticateAccount"] as? String else {
-            throw LoginError.unknownError("Bag response missing authentication endpoint")
-        }
+        let fallbackName = [gsa.raw["fn"] as? String, gsa.raw["ln"] as? String]
+            .compactMap { $0 }.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        let dsid = parsed.directoryServicesID
+            ?? (gsa.raw["DsPrsId"] as? NSNumber).map { "\($0)" }
+            ?? ""
 
-        return authenticateAccount
+        return Account(
+            email: credentials.email,
+            password: credentials.password,
+            name: parsed.accountName ?? fallbackName,
+            storeFront: parsed.storeFront ?? "143441",
+            passwordToken: parsed.passwordToken ?? "",
+            directoryServicesID: dsid,
+            pod: parsed.pod
+        )
+    }
+
+    /// Builds the legacy MZFinance authentication endpoint URL.
+    ///
+    /// We deliberately construct this ourselves instead of reading `authenticateAccount`
+    /// from `bag.xml`: Apple's bag now points that key at the newer SRP endpoint
+    /// (`auth.itunes.apple.com/auth/v1/native`), which silently rejects the legacy
+    /// plist credential body with an empty `200` response. The classic
+    /// `pXX-buy.itunes.apple.com/.../authenticate` endpoint still accepts it.
+    private func authenticateURL(authCode: String?, deviceID: String) -> String {
+        let prefix = authCode != nil
+            ? Constant.privateAppStoreAPIDomainPrefixWithAuthCode
+            : Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode
+        return "https://\(prefix)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathAuthenticate)?guid=\(deviceID)"
     }
 
     // MARK: - Token Validation
@@ -170,15 +196,18 @@ final class AppStoreService: AppStoreServiceProtocol {
                 print("⚠️ Account keychain deletion error: \(status)")
             }
 
-            await MainActor.run {
-                if let cookies = HTTPCookieStorage.shared.cookies {
-                    for cookie in cookies {
-                        if cookie.domain.contains("apple.com") || cookie.domain.contains("itunes.com") {
-                            HTTPCookieStorage.shared.deleteCookie(cookie)
-                        }
+            // deleteCookie synchronously dispatches to HTTPCookieStorage's internal
+            // (default-QoS) queue. Run it on a detached utility task so the waiting
+            // thread isn't higher priority than that queue — otherwise the login/
+            // logout call chain (user-initiated QoS) triggers a priority inversion.
+            await Task.detached(priority: .utility) {
+                let storage = HTTPCookieStorage.shared
+                if let cookies = storage.cookies {
+                    for cookie in cookies where cookie.domain.contains("apple.com") || cookie.domain.contains("itunes.com") {
+                        storage.deleteCookie(cookie)
                     }
                 }
-            }
+            }.value
 
         } catch {
             throw LoginError.unknownError("Logout failed: \(error.localizedDescription)")
@@ -791,6 +820,50 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Private Methods
 
+    /// Posts the MZFinance authenticate request (with PET as password) and follows
+    /// the pod redirect (e.g. p25 -> p46) manually, re-POSTing the body each hop.
+    /// URLSession can't auto-follow because the session delegate cancels these
+    /// redirects (to preserve the POST method/body). Returns the final parsed
+    /// result containing passwordToken / DSID / storeFront / pod.
+    private func authenticateMZFinance(email: String, password: String, deviceID: String) async throws -> LoginParseResult {
+        var redirect = ""
+        var attempt = 1
+        let maxAttempts = 5
+
+        while attempt <= maxAttempts {
+            let urlString = redirect.isEmpty
+                ? authenticateURL(authCode: nil, deviceID: deviceID)
+                : redirect
+            let credentials = LoginCredentials(email: email, password: password, authCode: nil)
+            let request = try createLoginRequest(credentials: credentials, deviceID: deviceID, attempt: attempt, url: urlString)
+
+            logger.logRequest(request)
+            let (data, response) = try await session.data(for: request)
+            logger.logResponse(response, data: data, error: nil)
+
+            guard let httpResponse = response as? HTTPURLResponse else { throw LoginError.networkError }
+
+            let result = try parseLoginResponse(
+                data: data, statusCode: httpResponse.statusCode,
+                attempt: attempt, authCode: nil, httpResponse: httpResponse
+            )
+
+            if result.shouldRetry {
+                if let redirectURL = result.redirectURL {
+                    redirect = redirectURL
+                } else {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    redirect = ""
+                }
+                attempt += 1
+                continue
+            }
+            return result
+        }
+
+        throw LoginError.unknownError("MZFinance authentication exceeded redirect attempts")
+    }
+
     private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, url urlString: String) throws -> URLRequest {
         guard let url = URL(string: urlString) else {
             throw LoginError.networkError
@@ -800,6 +873,14 @@ final class AppStoreService: AppStoreServiceProtocol {
         request.httpMethod = "POST"
         request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        // Apple now enforces device-bound anisette headers on the auth endpoint.
+        // On macOS these are generated natively via AOSKit (no external server).
+        let anisette = AnisetteProvider.shared.headers()
+        for (key, value) in anisette {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        print("🔑 [Anisette] attached \(anisette.count) header(s); OTP available: \(AnisetteProvider.shared.isOTPAvailable)")
 
         let payloadDict: [String: Any] = [
             "appleId": credentials.email,
@@ -840,6 +921,13 @@ final class AppStoreService: AppStoreServiceProtocol {
             }
         }
 
+        // An empty 200 from the auth endpoint means the request was silently rejected
+        // (e.g. the legacy plist body sent to the new SRP endpoint). Surface this
+        // explicitly instead of a generic network error so it stays diagnosable.
+        if data.isEmpty {
+            throw LoginError.unknownError("The authentication endpoint returned an empty response (status \(statusCode)). The request was likely rejected.")
+        }
+
         let normalizedData = normalizePlistData(data)
         guard let plist = try? PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any] else {
             throw LoginError.networkError
@@ -861,7 +949,7 @@ final class AppStoreService: AppStoreServiceProtocol {
             if authCode != nil {
                 throw LoginError.invalidAuthCode
             } else {
-                throw LoginError.twoFactorRequired
+                throw LoginError.twoFactorRequired(maskedPhone: nil)
             }
         }
 
