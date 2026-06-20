@@ -10,11 +10,12 @@ import SwiftUI
 struct DeviceInstallView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: DeviceInstallVM
+    @State private var showMismatchConfirm = false
 
     let appName: String
 
-    init(ipaPath: String, appName: String) {
-        self._viewModel = StateObject(wrappedValue: DeviceInstallVM(ipaPath: ipaPath))
+    init(ipaPath: String, appName: String, activeAppleID: String? = nil) {
+        self._viewModel = StateObject(wrappedValue: DeviceInstallVM(ipaPath: ipaPath, activeAppleID: activeAppleID))
         self.appName = appName
     }
 
@@ -28,6 +29,22 @@ struct DeviceInstallView: View {
         }
         .frame(width: 420, height: 320)
         .onAppear { Task { await viewModel.loadDevices() } }
+        .alert("Different Apple ID", isPresented: $showMismatchConfirm) {
+            Button("Install Anyway", role: .destructive) { viewModel.install() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(mismatchMessage)
+        }
+    }
+
+    private var mismatchMessage: String {
+        let bound = viewModel.boundAppleID ?? "?"
+        let active = viewModel.activeAppleID ?? "?"
+        return """
+        This app was downloaded with the Apple ID \(bound). FairPlay-protected apps only launch on a device signed into that same Apple ID — installing it on a device using a different account will crash the app on launch.
+
+        The account active in ipaverse right now is \(active).
+        """
     }
 
     // MARK: - Header
@@ -159,6 +176,10 @@ struct DeviceInstallView: View {
 
     private var deviceList: some View {
         VStack(spacing: 0) {
+            if viewModel.accountMismatch {
+                accountMismatchBanner
+            }
+
             HStack {
                 Text("Select Device")
                     .font(.subheadline)
@@ -195,6 +216,28 @@ struct DeviceInstallView: View {
         }
     }
 
+    private var accountMismatchBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                .foregroundColor(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Bound to a different Apple ID")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                Text("Downloaded with \(viewModel.boundAppleID ?? "?"). It will crash on launch unless the target device is signed into that Apple ID.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
     // MARK: - Footer
 
     private var footer: some View {
@@ -218,7 +261,11 @@ struct DeviceInstallView: View {
                     .disabled(viewModel.isInstalling)
 
                 Button {
-                    viewModel.install()
+                    if viewModel.accountMismatch {
+                        showMismatchConfirm = true
+                    } else {
+                        viewModel.install()
+                    }
                 } label: {
                     Label("Install", systemImage: "iphone.and.arrow.forward")
                         .fontWeight(.semibold)

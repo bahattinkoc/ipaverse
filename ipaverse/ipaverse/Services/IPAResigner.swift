@@ -124,6 +124,41 @@ struct IPAResigner {
         return plist
     }
 
+    /// The Apple ID (email) this IPA's FairPlay license is bound to, read from
+    /// the root `iTunesMetadata.plist`. App Store downloads carry this; a
+    /// FairPlay-encrypted app only decrypts on a device signed into that same
+    /// Apple ID, so installing it under a different account crashes it on launch.
+    /// Returns nil when the IPA has no such metadata (e.g. a DRM-free or
+    /// self-built IPA, where no account binding exists).
+    static func boundAppleID(ipaPath: String) -> String? {
+        guard let entry = (try? listEntries(ipaPath: ipaPath))?.first(where: {
+            ($0 as NSString).lastPathComponent.caseInsensitiveCompare("iTunesMetadata.plist") == .orderedSame
+        }) else { return nil }
+
+        guard let data = try? readEntry(ipaPath: ipaPath, entryName: entry),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        else { return nil }
+
+        return extractAppleID(from: plist)
+    }
+
+    /// Pulls the downloading account's email out of an iTunesMetadata plist.
+    /// Different stores/tools spell it differently, so try the well-known
+    /// top-level keys first, then the nested download-info account record.
+    private static func extractAppleID(from plist: [String: Any]) -> String? {
+        for key in ["apple-id", "appleId", "userName"] {
+            if let value = plist[key] as? String, value.contains("@") { return value }
+        }
+        for infoKey in ["download-info", "com.apple.iTunesStore.downloadInfo"] {
+            if let info = plist[infoKey] as? [String: Any],
+               let account = info["accountInfo"] as? [String: Any],
+               let value = account["AppleID"] as? String, value.contains("@") {
+                return value
+            }
+        }
+        return nil
+    }
+
     static func buildFileTree(ipaPath: String) throws -> [IPAFileNode] {
         let entries = try listEntries(ipaPath: ipaPath)
         return buildTree(from: entries)

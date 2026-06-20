@@ -26,10 +26,32 @@ final class DeviceInstallVM: ObservableObject {
     /// nil when unknown — in that case we don't block any device.
     @Published var minimumOSVersion: String?
 
+    /// Apple ID this IPA's FairPlay license is bound to (from iTunesMetadata).
+    /// nil when the IPA carries no binding (DRM-free / self-built).
+    @Published var boundAppleID: String?
+
+    /// Resolved once per IPA — `boundAppleID` being nil is a valid answer, so we
+    /// track resolution separately to avoid re-reading the zip on every refresh.
+    private var didResolveBinding = false
+
     let ipaPath: String
 
-    init(ipaPath: String) {
+    /// Apple ID currently signed into ipaverse, used to detect an account
+    /// mismatch against the IPA's FairPlay binding. nil when unknown.
+    let activeAppleID: String?
+
+    init(ipaPath: String, activeAppleID: String? = nil) {
         self.ipaPath = ipaPath
+        self.activeAppleID = activeAppleID
+    }
+
+    /// True when the IPA is bound to a different Apple ID than the active one —
+    /// installing it then risks a FairPlay crash on launch. Only fires when both
+    /// IDs are known and genuinely differ.
+    var accountMismatch: Bool {
+        guard let bound = boundAppleID, let active = activeAppleID,
+              !bound.isEmpty, !active.isEmpty else { return false }
+        return bound.caseInsensitiveCompare(active) != .orderedSame
     }
 
     var isInstalling: Bool {
@@ -106,17 +128,23 @@ final class DeviceInstallVM: ObservableObject {
         state = .loadingDevices
         let path = ipaPath
         let needMinOS = (minimumOSVersion == nil)
+        let needBound = !didResolveBinding
 
-        let result = await Task.detached { () -> ([ConnectedDevice], String?) in
+        let result = await Task.detached { () -> ([ConnectedDevice], String?, String?) in
             let devices = (try? DeviceInstaller.listDevices()) ?? []
             let minOS: String? = needMinOS
                 ? ((try? IPAResigner.loadInfoPlist(ipaPath: path))?["MinimumOSVersion"]) as? String
                 : nil
-            return (devices, minOS)
+            let bound: String? = needBound ? IPAResigner.boundAppleID(ipaPath: path) : nil
+            return (devices, minOS, bound)
         }.value
 
         if needMinOS, let minOS = result.1, !minOS.isEmpty {
             minimumOSVersion = minOS
+        }
+        if needBound {
+            boundAppleID = result.2
+            didResolveBinding = true
         }
 
         devices = result.0.filter { $0.isIPhone }

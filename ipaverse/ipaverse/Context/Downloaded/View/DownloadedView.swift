@@ -77,7 +77,8 @@ struct DownloadedView: View {
                     List(downloadedApps) { downloadedApp in
                         DownloadedAppRow(
                             downloadedApp: downloadedApp,
-                            downloadState: .idle
+                            downloadState: .idle,
+                            activeAppleID: loginViewModel.currentAccount?.email ?? account.email
                         ) {
                             openDetailSheet(for: downloadedApp)
                         }
@@ -160,7 +161,11 @@ struct DownloadedView: View {
             }
         }
         .sheet(item: $installContext) { ctx in
-            DeviceInstallView(ipaPath: ctx.ipaPath, appName: ctx.appName)
+            DeviceInstallView(
+                ipaPath: ctx.ipaPath,
+                appName: ctx.appName,
+                activeAppleID: loginViewModel.currentAccount?.email ?? account.email
+            )
         }
         .sheet(item: $appToScan) { app in
             SecurityScanView(ipaPath: app.filePath, appName: app.name)
