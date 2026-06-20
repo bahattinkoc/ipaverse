@@ -52,16 +52,30 @@ final class SecurityScanVM: ObservableObject {
         let path = ipaPath
         let name = appName
 
-        Task.detached { [weak self] in
+        Task {
             do {
-                let result = try IPASecurityScanner.scan(ipaPath: path, appName: name) { step in
-                    Task { @MainActor in self?.state = .scanning(step: step) }
+                let result = try await Self.scan(ipaPath: path, appName: name) { [weak self] step in
+                    self?.state = .scanning(step: step)
                 }
-                await MainActor.run { self?.state = .done(result) }
+                state = .done(result)
             } catch {
-                await MainActor.run { self?.state = .failed(error.localizedDescription) }
+                state = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// Runs the synchronous scan off the main thread. Static so it captures no
+    /// `self`, leaving the result/error handling on the MainActor in `run()`.
+    private static func scan(
+        ipaPath: String,
+        appName: String,
+        onProgress: @escaping @MainActor (String) -> Void
+    ) async throws -> SecurityScanResult {
+        try await Task.detached(priority: .userInitiated) {
+            try IPASecurityScanner.scan(ipaPath: ipaPath, appName: appName) { step in
+                Task { @MainActor in onProgress(step) }
+            }
+        }.value
     }
 
     // MARK: - Export
