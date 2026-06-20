@@ -12,6 +12,7 @@ import SwiftUI
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsVM()
     @EnvironmentObject var loginViewModel: LoginVM
+    @State private var showRegionPicker = false
 
     var body: some View {
         TabView {
@@ -33,12 +34,15 @@ struct SettingsView: View {
     // MARK: - Tabs
 
     private var accountTab: some View {
-        NavigationStack {
-            Form {
-                profileSection
-                accountSection
-            }
-            .formStyle(.grouped)
+        Form {
+            profileSection
+            accountSection
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $showRegionPicker) {
+            RegionPickerView()
+                .environmentObject(loginViewModel)
+                .frame(width: 400, height: 500)
         }
     }
 
@@ -91,9 +95,8 @@ struct SettingsView: View {
             }
             .padding(.vertical, 6)
 
-            NavigationLink {
-                RegionPickerView()
-                    .environmentObject(loginViewModel)
+            Button {
+                showRegionPicker = true
             } label: {
                 LabeledContent {
                     HStack(spacing: 4) {
@@ -102,11 +105,15 @@ struct SettingsView: View {
                         }
                         Text(regionName ?? "Not Set")
                             .foregroundColor(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
                 } label: {
                     Label("App Store Region", systemImage: "storefront")
                 }
             }
+            .buttonStyle(.plain)
         } header: {
             Text("Profile")
         }
@@ -243,6 +250,7 @@ struct RegionPickerView: View {
     @EnvironmentObject private var loginViewModel: LoginVM
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+    @State private var hoveredID: String? = nil
 
     private var regions: [StoreFrontCatalog.Region] { StoreFrontCatalog.allRegions }
 
@@ -262,49 +270,149 @@ struct RegionPickerView: View {
     }
 
     var body: some View {
-        List(filtered) { region in
+        VStack(spacing: 0) {
+            header
+            Divider()
+            searchBar
+            Divider()
+            regionList
+        }
+        .background(.regularMaterial)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("App Store Region")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Select a country for search results")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if loginViewModel.isUsingCustomRegion {
+                Button {
+                    loginViewModel.resetToDefaultStoreFront()
+                    dismiss()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(defaultRegion.map { "Reset to \($0.name)" } ?? "Reset")
+                            .font(.system(size: 12))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help("Restore your account's original App Store region")
+            }
+
             Button {
-                loginViewModel.changeStoreFront(region.storeFrontID)
                 dismiss()
             } label: {
-                HStack(spacing: 12) {
-                    Text(region.flagEmoji)
-                        .font(.system(size: 20))
-                        .frame(width: 28)
-                    Text(region.name)
-                        .foregroundColor(.primary)
-                        .font(.body)
-                    Spacer()
-                    if currentStoreFrontID == region.storeFrontID {
-                        Image(systemName: "checkmark")
-                            .foregroundColor(.accentColor)
-                            .fontWeight(.semibold)
-                            .font(.body)
-                    }
-                }
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 20, height: 20)
+                    .background(.quaternary, in: Circle())
             }
             .buttonStyle(.plain)
         }
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search countries...")
-        .navigationTitle("App Store Region")
-        .toolbar {
-            if loginViewModel.isUsingCustomRegion {
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        loginViewModel.resetToDefaultStoreFront()
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.counterclockwise")
-                            Text(defaultRegion.map { "Reset to \($0.name)" } ?? "Reset to Default")
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    // MARK: - Search Bar
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            TextField("Search countries…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.background)
+    }
+
+    // MARK: - Region List
+
+    private var regionList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if filtered.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                        .padding(.top, 40)
+                } else {
+                    ForEach(filtered) { region in
+                        regionRow(region)
+                        if region.id != filtered.last?.id {
+                            Divider()
+                                .padding(.leading, 52)
                         }
                     }
-                    .help("Restore your account's original App Store region")
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func regionRow(_ region: StoreFrontCatalog.Region) -> some View {
+        let isSelected = currentStoreFrontID == region.storeFrontID
+        let isHovered = hoveredID == region.storeFrontID
+
+        Button {
+            loginViewModel.changeStoreFront(region.storeFrontID)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Text(region.flagEmoji)
+                    .font(.system(size: 22))
+                    .frame(width: 32)
+
+                Text(region.name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.accentColor : .primary)
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.accentColor)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                isSelected
+                    ? Color.accentColor.opacity(0.08)
+                    : (isHovered ? Color.primary.opacity(0.05) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredID = $0 ? region.storeFrontID : nil }
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
 
