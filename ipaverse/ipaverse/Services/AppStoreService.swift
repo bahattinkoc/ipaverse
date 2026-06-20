@@ -215,7 +215,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Search
-    func search(term: String, account: Account, limit: Int = 5, platform: AppPlatform) async throws -> SearchResult {
+    func search(term: String, account: Account, limit: Int = 50, platform: AppPlatform) async throws -> SearchResult {
         let countryCode = getCountryCodeFromStoreFront(account.storeFront)
 
         let entity: String

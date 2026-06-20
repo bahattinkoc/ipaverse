@@ -148,6 +148,21 @@ struct SettingsView: View {
 
     private var searchSection: some View {
         Section {
+            LabeledContent {
+                Picker("", selection: $viewModel.settings.searchResultLimit) {
+                    ForEach(SearchResultLimit.allCases) { limit in
+                        Text(limit.displayName).tag(limit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .onChange(of: viewModel.settings.searchResultLimit) { _, _ in
+                    viewModel.saveSettings()
+                }
+            } label: {
+                Label("Search Results", systemImage: "list.number")
+            }
+
             Toggle(isOn: Binding(
                 get: { viewModel.settings.searchHistoryEnabled },
                 set: { _ in viewModel.toggleSearchHistory() }

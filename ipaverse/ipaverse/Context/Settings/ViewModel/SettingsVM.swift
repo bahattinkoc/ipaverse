@@ -19,15 +19,12 @@ final class SettingsVM: ObservableObject {
     }
 
     func loadSettings() {
-        if let data = UserDefaults.standard.data(forKey: "UserSettings"),
-           let decodedSettings = try? JSONDecoder().decode(SettingsModel.self, from: data) {
-            self.settings = decodedSettings
-        }
+        settings = SettingsModel.load()
     }
 
     func saveSettings() {
         if let encoded = try? JSONEncoder().encode(settings) {
-            UserDefaults.standard.set(encoded, forKey: "UserSettings")
+            UserDefaults.standard.set(encoded, forKey: SettingsModel.storageKey)
         }
     }
 

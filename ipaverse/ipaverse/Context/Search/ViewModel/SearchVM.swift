@@ -114,7 +114,8 @@ final class SearchVM: ObservableObject {
                     guard !Task.isCancelled else { return }
                     searchResults = [app]
                 } else {
-                    let result = try await service.search(term: trimmed, account: searchAccount, limit: 5, platform: selectedPlatform)
+                    let limit = SettingsModel.load().searchResultLimit.rawValue
+                    let result = try await service.search(term: trimmed, account: searchAccount, limit: limit, platform: selectedPlatform)
                     guard !Task.isCancelled else { return }
                     searchResults = result.results ?? []
                 }
