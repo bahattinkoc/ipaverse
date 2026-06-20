@@ -12,26 +12,54 @@ import SwiftUI
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsVM()
     @EnvironmentObject var loginViewModel: LoginVM
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        TabView {
+            accountTab
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+
+            downloadsTab
+                .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+
+            searchTab
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }
+
+            AboutView()
+                .tabItem { Label("About", systemImage: "info.circle") }
+        }
+        .frame(width: 480, height: 440)
+    }
+
+    // MARK: - Tabs
+
+    private var accountTab: some View {
         NavigationStack {
             Form {
                 profileSection
-                downloadsSection
-                searchSection
                 accountSection
             }
             .formStyle(.grouped)
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button("Done") { dismiss() }
-                        .keyboardShortcut(.return, modifiers: .command)
-                }
-            }
         }
-        .frame(width: 460, height: 660)
+    }
+
+    private var downloadsTab: some View {
+        Form {
+            downloadsSection
+        }
+        .formStyle(.grouped)
+    }
+
+    private var searchTab: some View {
+        Form {
+            searchSection
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Closes the Settings window (it's a standard window with its own close
+    /// button, so we dismiss it via AppKit when an action navigates away).
+    private func closeSettingsWindow() {
+        NSApp.keyWindow?.close()
     }
 
     // MARK: - Profile
@@ -188,7 +216,7 @@ struct SettingsView: View {
         Section {
             Button {
                 Task {
-                    dismiss()
+                    closeSettingsWindow()
                     await loginViewModel.logout()
                 }
             } label: {
@@ -197,7 +225,7 @@ struct SettingsView: View {
 
             Button(role: .destructive) {
                 Task {
-                    dismiss()
+                    closeSettingsWindow()
                     await loginViewModel.signOutCompletely()
                 }
             } label: {

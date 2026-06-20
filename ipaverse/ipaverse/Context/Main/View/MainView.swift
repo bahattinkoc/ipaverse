@@ -11,8 +11,7 @@ struct MainView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginVM
     @State private var selectedTab = 0
-    @State private var showingSettings = false
-    
+
     var body: some View {
         NavigationStack {
             TabView(selection: $selectedTab) {
@@ -33,17 +32,13 @@ struct MainView: View {
             .navigationTitle("ipaverse")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingSettings = true
-                    } label: {
+                    // Opens the standard, independent Settings window (the
+                    // SwiftUI `Settings` scene) — same one ⌘, triggers.
+                    SettingsLink {
                         Image(systemName: "gearshape")
                             .font(.title2)
                     }
                 }
-            }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
-                    .environmentObject(loginViewModel)
             }
         }
     }

@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @StateObject private var loginViewModel = LoginVM()
+    @EnvironmentObject private var loginViewModel: LoginVM
 
     var body: some View {
         Group {
@@ -32,5 +32,6 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
+        .environmentObject(LoginVM())
         .modelContainer(for: DownloadedApp.self, inMemory: true)
 }
