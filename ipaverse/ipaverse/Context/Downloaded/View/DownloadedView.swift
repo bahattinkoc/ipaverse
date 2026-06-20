@@ -26,6 +26,7 @@ struct DownloadedView: View {
     @State private var selectedApp: AppStoreApp?
     @State private var appToSign: DownloadedApp?
     @State private var installContext: IPAInstallContext?
+    @State private var appToScan: DownloadedApp?
     @State private var isDropTargeted = false
     @State private var importError: String?
 
@@ -104,6 +105,12 @@ struct DownloadedView: View {
                                 Label("Install to Device", systemImage: "iphone.and.arrow.forward")
                             }
 
+                            Button {
+                                appToScan = downloadedApp
+                            } label: {
+                                Label("Security Scan", systemImage: "shield.lefthalf.filled")
+                            }
+
                             Divider()
 
                             Button(role: .destructive) {
@@ -120,7 +127,7 @@ struct DownloadedView: View {
             }
             .navigationTitle("Downloaded")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button {
                         presentImportPanel()
                     } label: {
@@ -154,6 +161,9 @@ struct DownloadedView: View {
         }
         .sheet(item: $installContext) { ctx in
             DeviceInstallView(ipaPath: ctx.ipaPath, appName: ctx.appName)
+        }
+        .sheet(item: $appToScan) { app in
+            SecurityScanView(ipaPath: app.filePath, appName: app.name)
         }
         .alert("Import Failed", isPresented: Binding(
             get: { importError != nil },

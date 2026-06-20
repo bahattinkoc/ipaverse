@@ -1082,7 +1082,10 @@ final class AppStoreService: AppStoreServiceProtocol {
     @MainActor
     private func saveDownloadedApp(app: AppStoreApp, filePath: String, downloadedVersion: String? = nil, context: ModelContext) async {
         do {
-            let downloadedApp = DownloadedApp(app: app, filePath: filePath, versionOverride: downloadedVersion)
+            // Use the IPA's build date (matches the imported-IPA path) rather than "now",
+            // so the Downloaded list shows the app version's real date, not today's.
+            let buildDate = IPAResigner.appBuildDate(ipaPath: filePath) ?? Date()
+            let downloadedApp = DownloadedApp(app: app, downloadDate: buildDate, filePath: filePath, versionOverride: downloadedVersion)
             context.insert(downloadedApp)
             try context.save()
         } catch {
@@ -1121,7 +1124,7 @@ final class AppStoreService: AppStoreServiceProtocol {
                 existingApp.filePath = newFilePath
                 if let version = downloadedVersion {
                     existingApp.version = version
-                    existingApp.downloadDate = Date()
+                    existingApp.downloadDate = IPAResigner.appBuildDate(ipaPath: newFilePath) ?? Date()
                 }
                 try context.save()
             }
