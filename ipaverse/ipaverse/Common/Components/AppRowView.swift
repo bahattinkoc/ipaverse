@@ -14,6 +14,7 @@ protocol AppRowData {
     var rowVersion: String { get }
     var rowIconURL: String? { get }
     var rowPlatform: String? { get }
+    var rowIsImported: Bool { get }
 }
 
 extension AppStoreApp: AppRowData {
@@ -23,6 +24,7 @@ extension AppStoreApp: AppRowData {
     var rowVersion: String { self.version ?? "" }
     var rowIconURL: String? { self.iconURL }
     var rowPlatform: String? { self.platform?.rawValue }
+    var rowIsImported: Bool { false }
 }
 
 extension DownloadedApp: AppRowData {
@@ -32,6 +34,9 @@ extension DownloadedApp: AppRowData {
     var rowVersion: String { self.version }
     var rowIconURL: String? { self.iconURL }
     var rowPlatform: String? { self.platform }
+    // Imported IPAs are not tied to an App Store record (appId == 0), so they
+    // cannot be re-downloaded.
+    var rowIsImported: Bool { self.appId == 0 }
 }
 
 enum AppRowType {
@@ -58,21 +63,41 @@ struct AppRowView: View {
         .padding(.vertical, 4)
     }
 
+    @ViewBuilder
     private var appIconView: some View {
-        AsyncImage(url: URL(string: app.rowIconURL ?? "")) { image in
-            image
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } placeholder: {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(0.3))
-                .overlay(
-                    Image(systemName: "app.fill")
-                        .foregroundColor(.gray)
-                )
+        Group {
+            // Imported apps store a local file URL; AsyncImage is unreliable for
+            // file:// URLs, so load those directly. Remote store icons use AsyncImage.
+            if let urlString = app.rowIconURL,
+               let url = URL(string: urlString), url.isFileURL {
+                if let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    iconPlaceholder
+                }
+            } else {
+                AsyncImage(url: URL(string: app.rowIconURL ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } placeholder: {
+                    iconPlaceholder
+                }
+            }
         }
         .frame(width: 50, height: 50)
         .cornerRadius(8)
+    }
+
+    private var iconPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.gray.opacity(0.3))
+            .overlay(
+                Image(systemName: "app.fill")
+                    .foregroundColor(.gray)
+            )
     }
 
     private var appInfoView: some View {
@@ -154,7 +179,10 @@ struct AppRowView: View {
         case .downloaded(let downloadState):
             switch downloadState {
             case .idle:
-                redownloadButton
+                // Imported apps have no store license to re-download from.
+                if !app.rowIsImported {
+                    redownloadButton
+                }
             default:
                 downloadStateView(downloadState, action: onRedownload)
             }

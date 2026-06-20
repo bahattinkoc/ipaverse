@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import UniformTypeIdentifiers
 
 private struct IPAInstallContext: Identifiable {
     let id = UUID()
@@ -25,6 +26,8 @@ struct DownloadedView: View {
     @State private var selectedApp: AppStoreApp?
     @State private var appToSign: DownloadedApp?
     @State private var installContext: IPAInstallContext?
+    @State private var isDropTargeted = false
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -116,6 +119,27 @@ struct DownloadedView: View {
                 }
             }
             .navigationTitle("Downloaded")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        presentImportPanel()
+                    } label: {
+                        Label("Import IPA", systemImage: "square.and.arrow.down")
+                    }
+                    .help("Import an .ipa file from disk")
+                }
+            }
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleDrop(providers)
+            }
+            .overlay {
+                if isDropTargeted {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                        .padding(4)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .onAppear {
             loadDownloadedApps()
@@ -131,6 +155,14 @@ struct DownloadedView: View {
         .sheet(item: $installContext) { ctx in
             DeviceInstallView(ipaPath: ctx.ipaPath, appName: ctx.appName)
         }
+        .alert("Import Failed", isPresented: Binding(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("OK", role: .cancel) { importError = nil }
+        } message: {
+            Text(importError ?? "")
+        }
     }
 
     private func loadDownloadedApps() {
@@ -138,6 +170,44 @@ struct DownloadedView: View {
         errorMessage = nil
         Task {
             await MainActor.run { isLoading = false }
+        }
+    }
+
+    // MARK: - Import
+
+    private func presentImportPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "ipa") ?? .data]
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK else { return }
+        importIPAs(from: panel.urls)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let ipaProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+        guard !ipaProviders.isEmpty else { return false }
+
+        for provider in ipaProviders {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.pathExtension.lowercased() == "ipa" else { return }
+                DispatchQueue.main.async {
+                    importIPAs(from: [url])
+                }
+            }
+        }
+        return true
+    }
+
+    private func importIPAs(from urls: [URL]) {
+        for url in urls {
+            do {
+                try IPAImporter.importIPA(at: url, into: modelContext)
+            } catch {
+                importError = error.localizedDescription
+            }
         }
     }
 

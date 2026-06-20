@@ -129,6 +129,108 @@ struct IPAResigner {
         return buildTree(from: entries)
     }
 
+    /// Extracts the app's primary home-screen icon as raw PNG data. The bytes are
+    /// returned exactly as stored in the IPA, which for App Store builds is Apple's
+    /// "CgBI" optimized PNG — ImageIO/`NSImage` decode this correctly. Returns nil
+    /// when no suitable icon file can be located.
+    static func extractRawAppIcon(ipaPath: String) throws -> Data? {
+        let entries = try listEntries(ipaPath: ipaPath)
+
+        // PNGs directly at the .app bundle root: Payload/<x>.app/<file>.png
+        let rootPNGs = entries.filter { entry in
+            let parts = entry.components(separatedBy: "/")
+            return parts.count == 3 && parts[0] == "Payload"
+                && parts[1].hasSuffix(".app") && parts[2].lowercased().hasSuffix(".png")
+        }
+        guard !rootPNGs.isEmpty else { return nil }
+
+        let baseNames = iconBaseNames(from: (try? loadInfoPlist(ipaPath: ipaPath)) ?? [:])
+
+        func normalize(_ filename: String) -> String {
+            var n = (filename as NSString).lastPathComponent
+            if let dot = n.range(of: ".png", options: [.caseInsensitive, .backwards]) {
+                n = String(n[..<dot.lowerBound])
+            }
+            for suffix in ["@2x", "@3x", "~ipad", "~iphone"] {
+                n = n.replacingOccurrences(of: suffix, with: "")
+            }
+            return n
+        }
+        // Prefer higher scale, then larger dimension hinted in the name (e.g. Icon-76).
+        func score(_ entry: String) -> Int {
+            let file = (entry as NSString).lastPathComponent
+            let scale = file.contains("@3x") ? 3 : (file.contains("@2x") ? 2 : 1)
+            let dimension = normalize(file)
+                .components(separatedBy: CharacterSet.decimalDigits.inverted)
+                .compactMap { Int($0) }.max() ?? 0
+            return scale * 10000 + dimension
+        }
+
+        var candidates = rootPNGs
+        if !baseNames.isEmpty {
+            let matched = rootPNGs.filter { baseNames.contains(normalize($0)) }
+            if !matched.isEmpty { candidates = matched }
+        } else {
+            // Asset-catalog apps reference the icon by name only; the rendered files
+            // are conventionally "AppIcon*.png" at the bundle root.
+            let appIcons = rootPNGs.filter { (($0 as NSString).lastPathComponent).lowercased().hasPrefix("appicon") }
+            if !appIcons.isEmpty { candidates = appIcons }
+        }
+
+        guard let chosen = candidates.max(by: { score($0) < score($1) }) else { return nil }
+        let data = try readEntry(ipaPath: ipaPath, entryName: chosen)
+        return data.isEmpty ? nil : data
+    }
+
+    /// Best-effort build date of the app, read from the zip modification time of
+    /// the bundle's Info.plist (set by Xcode when the app was built). This is a far
+    /// more meaningful date for an imported IPA than "now". Returns nil if it can't
+    /// be determined.
+    static func appBuildDate(ipaPath: String) -> Date? {
+        guard let entry = (try? listEntries(ipaPath: ipaPath))?.first(where: { isMainInfoPlist($0) }) else {
+            return nil
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-Z", "-T", ipaPath, entry]  // zipinfo, sortable timestamps
+        process.useUTF8Locale()
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        process.waitUntilExit()
+
+        // Timestamp token has the form "yyyymmdd.hhmmss".
+        guard let range = output.range(of: #"\d{8}\.\d{6}"#, options: .regularExpression) else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd.HHmmss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.date(from: String(output[range]))
+    }
+
+    /// Collects the base names (without extension/scale suffix) the Info.plist
+    /// declares as app icons, across the modern and legacy key layouts.
+    private static func iconBaseNames(from plist: [String: Any]) -> Set<String> {
+        var names = Set<String>()
+        func collect(_ icons: [String: Any]?) {
+            guard let primary = icons?["CFBundlePrimaryIcon"] as? [String: Any],
+                  let files = primary["CFBundleIconFiles"] as? [String] else { return }
+            names.formUnion(files)
+        }
+        collect(plist["CFBundleIcons"] as? [String: Any])
+        collect(plist["CFBundleIcons~ipad"] as? [String: Any])
+        if let files = plist["CFBundleIconFiles"] as? [String] { names.formUnion(files) }
+        if let file = plist["CFBundleIconFile"] as? String {
+            var f = file
+            if let dot = f.range(of: ".png", options: [.caseInsensitive, .backwards]) {
+                f = String(f[..<dot.lowerBound])
+            }
+            names.insert(f)
+        }
+        return names
+    }
+
     // MARK: - Sign
 
     func sign(
