@@ -9,6 +9,43 @@ import Foundation
 
 // MARK: - Models
 
+/// How the device is reached by `devicectl`. Wireless installs work the same as
+/// wired ones once the device has been paired over cable and "Connect via
+/// network" is enabled in Xcode.
+enum DeviceTransport: Sendable {
+    case wired
+    case wireless
+    case unknown
+
+    /// Maps `connectionProperties.transportType` reported by devicectl.
+    init(rawTransportType: String) {
+        switch rawTransportType.lowercased() {
+        case "wired", "usb":
+            self = .wired
+        case "localnetwork", "network", "wifi":
+            self = .wireless
+        default:
+            self = .unknown
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .wired: "USB"
+        case .wireless: "Wi-Fi"
+        case .unknown: ""
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .wired: "cable.connector"
+        case .wireless: "wifi"
+        case .unknown: "bolt.horizontal"
+        }
+    }
+}
+
 struct ConnectedDevice: Identifiable, Hashable, Sendable {
     let id: String       // UDID
     let name: String
@@ -16,6 +53,7 @@ struct ConnectedDevice: Identifiable, Hashable, Sendable {
     let osVersion: String
     let platform: String
     let isAvailable: Bool
+    let transport: DeviceTransport
 
     var isIPhone: Bool { platform == "iOS" || platform == "iPadOS" }
     var displayModel: String { model.isEmpty ? platform : model }
@@ -84,10 +122,10 @@ struct DeviceInstaller {
         // devicectl/coredeviced runs in its own sandbox and cannot read files in
         // TCC-protected locations (~/Desktop, ~/Documents, ~/Downloads), which
         // fails with CoreDeviceError 1005 ("unable to create bookmark data").
-        // Stage the IPA in the per-user temp dir (not TCC-protected) first.
+        // Stage the app in the per-user temp dir (not TCC-protected) first.
         progress("Preparing app...")
-        let stagedPath = try stageForInstall(ipaPath: ipaPath)
-        defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: stagedPath).deletingLastPathComponent()) }
+        let staged = try stageForInstall(ipaPath: ipaPath)
+        defer { try? FileManager.default.removeItem(at: staged.cleanupDir) }
 
         progress("Connecting to \(device.name)...")
 
@@ -95,7 +133,7 @@ struct DeviceInstaller {
             executable: "/usr/bin/xcrun",
             arguments: ["devicectl", "device", "install", "app",
                         "--device", device.id,
-                        stagedPath]
+                        staged.appPath]
         )
 
         let combined = (out + err).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,9 +146,23 @@ struct DeviceInstaller {
 
     // MARK: - Private helpers
 
-    /// Copies the IPA into a fresh per-user temp directory and returns the copy's
-    /// path, so `devicectl` can read it without hitting TCC/sandbox restrictions.
-    private static func stageForInstall(ipaPath: String) throws -> String {
+    /// Extracts the IPA into a fresh per-user temp directory and returns the path
+    /// to the `.app` bundle inside it (plus the staging dir to clean up).
+    ///
+    /// devicectl natively installs a `.app` bundle ("This command installs an app
+    /// bundle (with a .app extension)"). When handed an `.ipa` it unzips the
+    /// archive internally with a decoder that, for entries whose names aren't
+    /// flagged UTF-8, mangles non-ASCII bytes into "?". Apps with a non-ASCII
+    /// bundle name (e.g. "Tıkla Gelsin.app", where "ı" is the two UTF-8 bytes
+    /// C4 B1) then unpack as "T??kla Gelsin.app" — the binary no longer matches
+    /// CFBundleExecutable, so the bundle is invalid and install fails with
+    /// CoreDeviceError 3000/3002 ("Failed to get the identifier").
+    ///
+    /// Extracting with `ditto` onto APFS decodes those names as UTF-8 correctly,
+    /// so we hand devicectl the resulting `.app` directory and it never re-decodes
+    /// the archive. The temp dir is also outside TCC-protected locations, avoiding
+    /// the sandbox read failures (CoreDeviceError 1005) that plain paths hit.
+    private static func stageForInstall(ipaPath: String) throws -> (appPath: String, cleanupDir: URL) {
         let fm = FileManager.default
         let source = URL(fileURLWithPath: ipaPath)
 
@@ -122,9 +174,23 @@ struct DeviceInstaller {
             .appendingPathComponent("ipaverse_install_\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
 
-        let dest = stagingDir.appendingPathComponent(source.lastPathComponent)
-        try fm.copyItem(at: source, to: dest)
-        return dest.path
+        // ditto preserves UTF-8 filenames correctly; unlike devicectl's internal
+        // unzip it does not mangle non-ASCII bundle names.
+        try runProcess(
+            executable: "/usr/bin/ditto",
+            arguments: ["-x", "-k", source.path, stagingDir.path]
+        )
+
+        let payloadURL = stagingDir.appendingPathComponent("Payload", isDirectory: true)
+        let appURL = (try? fm.contentsOfDirectory(at: payloadURL, includingPropertiesForKeys: nil))?
+            .first(where: { $0.pathExtension == "app" })
+
+        guard let appURL else {
+            try? fm.removeItem(at: stagingDir)
+            throw DeviceInstallerError.installFailed("No .app bundle found inside the IPA's Payload folder.")
+        }
+
+        return (appURL.path, stagingDir)
     }
 
     @discardableResult
@@ -132,6 +198,7 @@ struct DeviceInstaller {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.useUTF8Locale()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -166,6 +233,7 @@ struct DeviceInstaller {
         let osVersion = devProps["osVersionNumber"] as? String ?? ""
         let platform = hw["platform"] as? String ?? ""
         let tunnelState = conn["tunnelState"] as? String ?? ""
+        let transportType = conn["transportType"] as? String ?? ""
 
         // Consider disconnected as available — install still works over cable
         let isAvailable = tunnelState != "unavailable"
@@ -176,7 +244,8 @@ struct DeviceInstaller {
             model: model,
             osVersion: osVersion,
             platform: platform,
-            isAvailable: isAvailable
+            isAvailable: isAvailable,
+            transport: DeviceTransport(rawTransportType: transportType)
         )
     }
 }

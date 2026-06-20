@@ -175,6 +175,7 @@ struct IPAPatcher {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-Z1", ipaPath]
+        process.useUTF8Locale()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -199,6 +200,7 @@ struct IPAPatcher {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-p", ipaPath, entryName]
+        process.useUTF8Locale()
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
@@ -214,6 +216,7 @@ struct IPAPatcher {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
         process.currentDirectoryURL = URL(fileURLWithPath: workDir)
         process.arguments = ["-u", ipaPath] + paths
+        process.useUTF8Locale()
         let errPipe = Pipe()
         let outPipe = Pipe()
         process.standardError = errPipe

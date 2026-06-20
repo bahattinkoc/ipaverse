@@ -78,6 +78,7 @@ struct IPAResigner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-identity", "-v", "-p", "codesigning"]
+        process.useUTF8Locale()  // certificate names may contain non-ASCII (e.g. "Apple Development: Ahmet Çelik")
         let pipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = pipe
@@ -256,6 +257,7 @@ struct IPAResigner {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let wd = workingDirectory { process.currentDirectoryURL = wd }
+        process.useUTF8Locale()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -277,6 +279,7 @@ struct IPAResigner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.useUTF8Locale()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -550,6 +553,7 @@ struct IPAResigner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-Z1", ipaPath]
+        process.useUTF8Locale()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -567,6 +571,7 @@ struct IPAResigner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-p", ipaPath, entryName]
+        process.useUTF8Locale()
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()

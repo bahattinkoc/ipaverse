@@ -146,7 +146,7 @@ struct DeviceInstallView: View {
             Text("No iOS Devices Found")
                 .font(.title3)
                 .fontWeight(.semibold)
-            Text("Connect an iPhone or iPad via USB, unlock it, and tap Trust on the device.")
+            Text("Connect an iPhone or iPad via USB, unlock it, and tap Trust on the device. For Wi-Fi installs, pair once over cable, then enable \u{201C}Connect via network\u{201D} in Xcode \u{203A} Devices.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -253,11 +253,14 @@ private struct DeviceRow: View {
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(device.name)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .foregroundColor(isCompatible ? .primary : .secondary)
+                HStack(spacing: 6) {
+                    Text(device.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                        .foregroundColor(isCompatible ? .primary : .secondary)
+                    transportBadge
+                }
                 Text("\(device.displayModel) · iOS \(device.osVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -284,5 +287,23 @@ private struct DeviceRow: View {
         .padding(.vertical, 2)
         .opacity(isCompatible ? 1 : 0.6)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var transportBadge: some View {
+        if device.transport != .unknown {
+            HStack(spacing: 3) {
+                Image(systemName: device.transport.icon)
+                Text(device.transport.label)
+            }
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                Capsule().fill(Color(NSColor.quaternaryLabelColor).opacity(0.5))
+            )
+        }
     }
 }
