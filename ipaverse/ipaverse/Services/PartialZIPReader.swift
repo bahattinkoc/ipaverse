@@ -30,9 +30,21 @@ struct PartialZIPReader {
     let url: URL
     private let session: URLSession
 
-    init(url: URL, session: URLSession = .shared) {
+    /// Dedicated session for CDN range reads. A short timeout means a stalled
+    /// connection fails fast instead of blocking the version list for 60s, and
+    /// a small per-host connection cap avoids overwhelming Apple's CDN.
+    private static let metadataSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        config.httpMaximumConnectionsPerHost = 6
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
+
+    init(url: URL, session: URLSession? = nil) {
         self.url = url
-        self.session = session
+        self.session = session ?? Self.metadataSession
     }
 
     func readVersionMetadata() async throws -> VersionDisplayInfo {
@@ -232,7 +244,14 @@ struct PartialZIPReader {
         let releaseDate = parseReleaseDate(from: plist)
             ?? modDateFromZIP(modTime: entry.modTime, modDate: entry.modDate)
 
-        return VersionDisplayInfo(versionString: version, releaseDate: releaseDate)
+        let minimumOSVersion = (plist["MinimumOSVersion"] as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+
+        return VersionDisplayInfo(
+            versionString: version,
+            releaseDate: releaseDate,
+            minimumOSVersion: minimumOSVersion
+        )
     }
 
     private func parseReleaseDate(from plist: [String: Any]) -> Date? {

@@ -98,11 +98,13 @@ struct AppVersion: Identifiable {
     let isLatest: Bool
     var displayVersion: String?
     var releaseDate: Date?
+    var minimumOSVersion: String?
 }
 
 struct VersionDisplayInfo {
     let versionString: String
     let releaseDate: Date?
+    let minimumOSVersion: String?
 }
 
 enum VersionsLoadState {

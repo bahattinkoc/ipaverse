@@ -81,13 +81,21 @@ struct DeviceInstaller {
         device: ConnectedDevice,
         progress: @escaping @Sendable (String) -> Void
     ) throws {
+        // devicectl/coredeviced runs in its own sandbox and cannot read files in
+        // TCC-protected locations (~/Desktop, ~/Documents, ~/Downloads), which
+        // fails with CoreDeviceError 1005 ("unable to create bookmark data").
+        // Stage the IPA in the per-user temp dir (not TCC-protected) first.
+        progress("Preparing app...")
+        let stagedPath = try stageForInstall(ipaPath: ipaPath)
+        defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: stagedPath).deletingLastPathComponent()) }
+
         progress("Connecting to \(device.name)...")
 
         let (out, err) = try runProcess(
             executable: "/usr/bin/xcrun",
             arguments: ["devicectl", "device", "install", "app",
                         "--device", device.id,
-                        ipaPath]
+                        stagedPath]
         )
 
         let combined = (out + err).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,6 +107,25 @@ struct DeviceInstaller {
     }
 
     // MARK: - Private helpers
+
+    /// Copies the IPA into a fresh per-user temp directory and returns the copy's
+    /// path, so `devicectl` can read it without hitting TCC/sandbox restrictions.
+    private static func stageForInstall(ipaPath: String) throws -> String {
+        let fm = FileManager.default
+        let source = URL(fileURLWithPath: ipaPath)
+
+        guard fm.fileExists(atPath: source.path) else {
+            throw DeviceInstallerError.installFailed("IPA file not found at \(source.path)")
+        }
+
+        let stagingDir = fm.temporaryDirectory
+            .appendingPathComponent("ipaverse_install_\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+
+        let dest = stagingDir.appendingPathComponent(source.lastPathComponent)
+        try fm.copyItem(at: source, to: dest)
+        return dest.path
+    }
 
     @discardableResult
     private static func runProcess(executable: String, arguments: [String]) throws -> (String, String) {

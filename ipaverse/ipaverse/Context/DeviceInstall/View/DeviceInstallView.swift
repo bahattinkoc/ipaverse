@@ -69,11 +69,58 @@ struct DeviceInstallView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if case .success(let name) = viewModel.state {
             successView(deviceName: name)
+        } else if viewModel.hasInstallError, let msg = viewModel.errorMessage {
+            errorView(message: msg)
         } else if viewModel.devices.isEmpty {
             emptyView
         } else {
             deviceList
         }
+    }
+
+    private func errorView(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text("Installation Failed")
+                    .font(.headline)
+                Spacer()
+            }
+
+            ScrollView {
+                Text(message)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(NSColor.textBackgroundColor))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color(NSColor.separatorColor))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            HStack {
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(message, forType: .string)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                Button("Back to Devices") { viewModel.clearError() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func successView(deviceName: String) -> some View {
@@ -133,9 +180,16 @@ struct DeviceInstallView: View {
             Divider()
 
             List(viewModel.devices, selection: $viewModel.selectedDevice) { device in
-                DeviceRow(device: device, isSelected: viewModel.selectedDevice == device)
-                    .contentShape(Rectangle())
-                    .onTapGesture { viewModel.selectedDevice = device }
+                DeviceRow(
+                    device: device,
+                    isSelected: viewModel.selectedDevice == device,
+                    isCompatible: viewModel.isCompatible(device),
+                    requirement: viewModel.requirementNote(for: device)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if viewModel.isCompatible(device) { viewModel.selectedDevice = device }
+                }
             }
             .listStyle(.plain)
         }
@@ -151,14 +205,6 @@ struct DeviceInstallView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-            } else if let err = viewModel.errorMessage {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.orange)
-                    .font(.caption)
-                Text(err)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
             }
 
             Spacer()
@@ -181,7 +227,8 @@ struct DeviceInstallView: View {
                 .disabled(
                     viewModel.selectedDevice == nil ||
                     viewModel.isInstalling ||
-                    viewModel.devices.isEmpty
+                    viewModel.devices.isEmpty ||
+                    (viewModel.selectedDevice.map { !viewModel.isCompatible($0) } ?? false)
                 )
             }
         }
@@ -195,12 +242,14 @@ struct DeviceInstallView: View {
 private struct DeviceRow: View {
     let device: ConnectedDevice
     let isSelected: Bool
+    let isCompatible: Bool
+    let requirement: String?
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: device.stateIcon)
                 .font(.title3)
-                .foregroundColor(device.isAvailable ? .accentColor : .secondary)
+                .foregroundColor(device.isAvailable && isCompatible ? .accentColor : .secondary)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -208,15 +257,24 @@ private struct DeviceRow: View {
                     .font(.body)
                     .fontWeight(.medium)
                     .lineLimit(1)
+                    .foregroundColor(isCompatible ? .primary : .secondary)
                 Text("\(device.displayModel) · iOS \(device.osVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+                if let requirement {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(requirement)
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+                }
             }
 
             Spacer()
 
-            if isSelected {
+            if isSelected && isCompatible {
                 Image(systemName: "checkmark")
                     .font(.caption)
                     .fontWeight(.semibold)
@@ -224,6 +282,7 @@ private struct DeviceRow: View {
             }
         }
         .padding(.vertical, 2)
+        .opacity(isCompatible ? 1 : 0.6)
         .contentShape(Rectangle())
     }
 }

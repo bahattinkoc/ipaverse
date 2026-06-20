@@ -83,6 +83,11 @@ final class AppDetailVM: ObservableObject {
         selectedVersionId = result.latestVersionId
     }
 
+    /// Max simultaneous metadata fetches. Each fetch issues several CDN range
+    /// requests, so an unbounded fan-out (apps can have 50+ versions) hammers
+    /// Apple's CDN and every request times out. A small window keeps it fast.
+    private static let maxConcurrentMetadataFetches = 6
+
     private func fetchDisplayNames(service: AppStoreService) async {
         guard case .loaded(let initialVersions) = versionsState else { return }
         let app = self.app
@@ -90,21 +95,38 @@ final class AppDetailVM: ObservableObject {
 
         var versions = initialVersions
 
+        // Newest-first so the versions the user is most likely to pick resolve first.
+        let order = versions.map(\.id)
+        var nextIndex = 0
+
         await withTaskGroup(of: (String, VersionDisplayInfo?).self) { group in
-            for version in versions {
+            func addTask(for id: String) {
                 group.addTask {
                     let info = try? await service.fetchVersionDisplayName(
-                        app: app, account: account, versionId: version.id
+                        app: app, account: account, versionId: id
                     )
-                    return (version.id, info)
+                    return (id, info)
                 }
             }
 
+            // Prime the window.
+            while nextIndex < order.count, nextIndex < Self.maxConcurrentMetadataFetches {
+                addTask(for: order[nextIndex])
+                nextIndex += 1
+            }
+
+            // As each finishes, apply it and start the next one.
             for await (id, info) in group {
+                if nextIndex < order.count {
+                    addTask(for: order[nextIndex])
+                    nextIndex += 1
+                }
+
                 guard let info,
                       let index = versions.firstIndex(where: { $0.id == id }) else { continue }
                 versions[index].displayVersion = info.versionString
                 versions[index].releaseDate = info.releaseDate
+                versions[index].minimumOSVersion = info.minimumOSVersion
                 versionsState = .loaded(versions)
             }
         }

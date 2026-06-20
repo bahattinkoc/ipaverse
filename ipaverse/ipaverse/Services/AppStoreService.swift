@@ -809,9 +809,10 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         // Fallback: use metadata from API response (may be stale for older versions)
+        let apiMinimumOS = (metadata["minimumOSVersion"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         for key in ["bundleShortVersionString", "CFBundleShortVersionString"] {
             if let v = metadata[key] as? String, !v.isEmpty {
-                return VersionDisplayInfo(versionString: v, releaseDate: nil)
+                return VersionDisplayInfo(versionString: v, releaseDate: nil, minimumOSVersion: apiMinimumOS)
             }
         }
 

@@ -148,11 +148,19 @@ struct AppDetailView: View {
                     Text(displayVersion)
                         .font(.body)
                         .foregroundColor(.primary)
-                    if let date = version.releaseDate {
-                        Text(date, format: .dateTime.year().month(.abbreviated).day())
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    HStack(spacing: 6) {
+                        if let date = version.releaseDate {
+                            Text(date, format: .dateTime.year().month(.abbreviated).day())
+                        }
+                        if let minOS = version.minimumOSVersion {
+                            if version.releaseDate != nil {
+                                Text("·")
+                            }
+                            Text("iOS \(minOS)+")
+                        }
                     }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 } else {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.6)
