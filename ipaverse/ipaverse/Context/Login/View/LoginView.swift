@@ -79,7 +79,7 @@ struct LoginView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 16, weight: .semibold))
                     Text("Back")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.appControlLabel)
                 }
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 16)
@@ -120,24 +120,27 @@ struct LoginView: View {
         VStack(spacing: 24) {
             VStack(spacing: 8) {
                 Text("Welcome Back")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.appScreenTitle)
                     .foregroundColor(.primary)
 
                 Text("Choose an account to continue")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.appBody)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
 
             VStack(spacing: 10) {
                 ForEach(viewModel.savedProfiles) { profile in
-                    AccountProfileCard(profile: profile) {
+                    let isThisCardLoading = viewModel.quickLoginEmail == profile.email
+                    AccountProfileCard(profile: profile, isLoading: isThisCardLoading) {
                         Task { await viewModel.quickLogin(profile: profile) }
                     } onEdit: {
                         viewModel.selectProfileForEditing(profile)
                     } onDelete: {
                         viewModel.deleteProfile(profile)
                     }
+                    .disabled(viewModel.isLoading)
+                    .opacity(viewModel.isLoading && !isThisCardLoading ? 0.5 : 1)
                 }
             }
 
@@ -148,7 +151,7 @@ struct LoginView: View {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 16))
                     Text("Add Another Account")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.appEmphasis)
                 }
                 .foregroundColor(.accentColor)
                 .frame(maxWidth: .infinity)
@@ -161,6 +164,8 @@ struct LoginView: View {
                 )
             }
             .buttonStyle(.plain)
+            .disabled(viewModel.isLoading)
+            .opacity(viewModel.isLoading ? 0.5 : 1)
         }
     }
 
@@ -170,13 +175,13 @@ struct LoginView: View {
         VStack(spacing: 24) {
             VStack(spacing: 16) {
                 Text(viewModel.editingProfile != nil ? "Edit Account" : "Sign In")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.appScreenTitle)
                     .foregroundColor(.primary)
 
                 Text(viewModel.editingProfile != nil
                      ? "Update your credentials for \(viewModel.editingProfile!.email)"
                      : "Sign in to your Apple ID to continue")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.appScreenSubtitle)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -222,12 +227,12 @@ struct LoginView: View {
         VStack(spacing: 24) {
             VStack(spacing: 12) {
                 Text("Two-Factor Authentication")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.appScreenTitle)
                     .foregroundColor(.primary)
 
                 if let phone = viewModel.twoFactorPhoneHint {
                     Text("Apple sent a 6-digit verification code by text message to:")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.appBody)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
 
@@ -243,7 +248,7 @@ struct LoginView: View {
                     .cornerRadius(10)
                 } else {
                     Text("Apple sent a 6-digit verification code to your trusted devices.")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.appBody)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
 
@@ -265,7 +270,7 @@ struct LoginView: View {
 
             VStack(spacing: 16) {
                 Text("Verification Code")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.appSectionTitle)
                     .foregroundColor(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -352,6 +357,7 @@ struct LoginView: View {
 
 struct AccountProfileCard: View {
     let profile: SavedProfile
+    var isLoading: Bool = false
     let onSelect: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -363,51 +369,64 @@ struct AccountProfileCard: View {
                     Circle()
                         .fill(Color.accentColor.opacity(0.12))
                         .frame(width: 46, height: 46)
-                    Text(profile.initials)
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundColor(.accentColor)
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(profile.initials)
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .foregroundColor(.accentColor)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(profile.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.appEmphasis)
                         .foregroundColor(.primary)
                         .lineLimit(1)
 
-                    Text(profile.email)
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    if isLoading {
+                        Text("Signing in…")
+                            .font(.system(size: 13))
+                            .foregroundColor(.accentColor)
+                    } else {
+                        Text(profile.email)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
 
-                    if let flag = profile.flagEmoji, let country = profile.countryName {
-                        HStack(spacing: 4) {
-                            Text(flag)
-                                .font(.system(size: 11))
-                            Text(country)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.secondary.opacity(0.75))
+                        if let flag = profile.flagEmoji, let country = profile.countryName {
+                            HStack(spacing: 4) {
+                                Text(flag)
+                                    .font(.system(size: 11))
+                                Text(country)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.secondary.opacity(0.75))
+                            }
                         }
                     }
                 }
 
                 Spacer()
 
-                HStack(spacing: 6) {
-                    Button(action: onEdit) {
-                        Image(systemName: "pencil.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.secondary.opacity(0.55))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Edit account")
+                if !isLoading {
+                    HStack(spacing: 6) {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil.circle.fill")
+                                .font(.system(size: 22))
+                                .foregroundColor(.secondary.opacity(0.55))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Edit account")
 
-                    Button(action: onDelete) {
-                        Image(systemName: "minus.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.red.opacity(0.7))
+                        Button(action: onDelete) {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.system(size: 22))
+                                .foregroundColor(.red.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove account")
                     }
-                    .buttonStyle(.plain)
-                    .help("Remove account")
                 }
             }
             .padding(.horizontal, 16)
@@ -416,7 +435,7 @@ struct AccountProfileCard: View {
             .cornerRadius(12)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 1)
+                    .stroke(isLoading ? Color.accentColor.opacity(0.4) : Color(NSColor.separatorColor).opacity(0.5), lineWidth: isLoading ? 1.5 : 1)
             )
             .contentShape(Rectangle())
         }

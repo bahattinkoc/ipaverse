@@ -37,42 +37,22 @@ struct DownloadedView: View {
                     ProgressView("Loading downloaded apps...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = errorMessage {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 48))
-                            .foregroundColor(.orange)
-                        
-                        Text("Error")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text(error)
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        
-                        Button("Retry") {
-                            loadDownloadedApps()
-                        }
-                        .buttonStyle(.borderedProminent)
+                    EmptyStateView(
+                        icon: "exclamationmark.triangle",
+                        title: "Error",
+                        message: error,
+                        tone: .warning,
+                        actionTitle: "Retry"
+                    ) {
+                        loadDownloadedApps()
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if downloadedApps.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 48))
-                            .foregroundColor(.blue)
-                        
-                        Text("No Downloaded Apps")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Apps you download will appear here")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    EmptyStateView(
+                        icon: "arrow.down.circle",
+                        title: "No Downloaded Apps",
+                        message: "Apps you download will appear here",
+                        tone: .accent
+                    )
                 } else {
                     List(downloadedApps) { downloadedApp in
                         DownloadedAppRow(

@@ -227,19 +227,12 @@ struct SettingsView: View {
                     await loginViewModel.logout()
                 }
             } label: {
-                Label("Add / Switch Account", systemImage: "person.2.circle")
-            }
-
-            Button(role: .destructive) {
-                Task {
-                    closeSettingsWindow()
-                    await loginViewModel.signOutCompletely()
-                }
-            } label: {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
         } header: {
             Text("Account")
+        } footer: {
+            Text("Signing out keeps this account available for one-tap sign-in. To remove it completely, delete it from the account list on the sign-in screen.")
         }
     }
 }

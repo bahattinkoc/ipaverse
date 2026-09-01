@@ -35,66 +35,30 @@ struct SearchView: View {
                         ProgressView("Searching...")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let error = viewModel.errorMessage {
-                        VStack(spacing: 16) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.system(size: 48))
-                                .foregroundColor(.orange)
-
-                            Text("Search Error")
-                                .font(.title2)
-                                .fontWeight(.semibold)
-
-                            Text(error)
-                                .font(.body)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-
-                            Button("Retry") {
-                                viewModel.performSearch()
-                            }
-                            .buttonStyle(.borderedProminent)
+                        EmptyStateView(
+                            icon: "exclamationmark.triangle",
+                            title: "Search Error",
+                            message: error,
+                            tone: .warning,
+                            actionTitle: "Retry"
+                        ) {
+                            viewModel.performSearch()
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if viewModel.searchResults.isEmpty && !viewModel.searchText.isEmpty && !viewModel.isSearching {
-                        VStack(spacing: 16) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 48))
-                                .foregroundColor(.gray)
-
-                            Text("No Results")
-                                .font(.title2)
-                                .fontWeight(.semibold)
-
-                            if viewModel.selectedPlatform == .visionos && !viewModel.isLookupMode {
-                                Text("Apple's search API doesn't index native visionOS-only apps by name. Enter the app's exact Bundle ID instead (e.g. com.example.app) to find it.")
-                                    .font(.body)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 32)
-                            } else {
-                                Text("Try searching for a different app")
-                                    .font(.body)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        EmptyStateView(
+                            icon: "magnifyingglass",
+                            title: "No Results",
+                            message: viewModel.selectedPlatform == .visionos && !viewModel.isLookupMode
+                                ? "Apple's search API doesn't index native visionOS-only apps by name. Enter the app's exact Bundle ID instead (e.g. com.example.app) to find it."
+                                : "Try searching for a different app"
+                        )
                     } else if viewModel.searchText.isEmpty {
-                        VStack(spacing: 16) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 48))
-                                .foregroundColor(.blue)
-
-                            Text("Search Apps")
-                                .font(.title2)
-                                .fontWeight(.semibold)
-
-                            Text("Enter an app name to search")
-                                .font(.body)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        EmptyStateView(
+                            icon: "magnifyingglass",
+                            title: "Search Apps",
+                            message: "Enter an app name to search",
+                            tone: .accent
+                        )
                     } else {
                         List(viewModel.searchResults) { app in
                             SearchResultRow(

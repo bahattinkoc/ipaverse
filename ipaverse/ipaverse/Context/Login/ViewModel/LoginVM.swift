@@ -35,6 +35,9 @@ final class LoginVM: ObservableObject {
     @Published var savedProfiles: [SavedProfile] = []
     @Published var showAccountPicker: Bool = false
     @Published var editingProfile: SavedProfile? = nil
+    /// Email of the saved profile currently being quick-logged-in, so the account
+    /// picker can show a spinner on that specific card instead of no feedback at all.
+    @Published var quickLoginEmail: String? = nil
 
     // MARK: - SERVICES
 
@@ -162,16 +165,6 @@ final class LoginVM: ObservableObject {
         }
     }
 
-    func signOutCompletely() async {
-        for profile in savedProfiles {
-            keychainService.deleteProfilePassword(for: profile.email)
-        }
-        savedProfiles = []
-        UserDefaults.standard.removeObject(forKey: "savedProfiles")
-        try? keychainService.clearCredentials()
-        await logout()
-    }
-
     func logout(withMessage message: String? = nil) async {
         do {
             try await appStoreService.logout()
@@ -210,7 +203,9 @@ final class LoginVM: ObservableObject {
 
         email = profile.email
         password = savedPassword
+        quickLoginEmail = profile.email
         await login()
+        quickLoginEmail = nil
     }
 
     func selectProfileForEditing(_ profile: SavedProfile) {

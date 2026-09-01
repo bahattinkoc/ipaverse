@@ -44,6 +44,18 @@ enum AppRowType {
     case downloaded(DownloadState)
 }
 
+extension AppPlatform {
+    var badgeColor: Color {
+        switch self {
+        case .ios: return .blue
+        case .ipados: return .indigo
+        case .macos: return .orange
+        case .tvos: return .purple
+        case .visionos: return .pink
+        }
+    }
+}
+
 struct AppRowView: View {
     let app: AppRowData
     let appRowType: AppRowType
@@ -116,29 +128,24 @@ struct AppRowView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                if let platform = app.rowPlatform {
+                if let platformRaw = app.rowPlatform, let platform = AppPlatform(rawValue: platformRaw) {
                     HStack(spacing: 4) {
-                        Image(systemName: platform == "iOS" ? "iphone" : "macbook")
+                        Image(systemName: platform.iconName)
                             .font(.system(size: 8, weight: .medium))
 
-                        Text(platform)
+                        Text(platform.rawValue)
                             .font(.system(size: 10, weight: .medium))
                     }
-                    .foregroundColor(platform == "iOS" ? .blue : .orange)
+                    .foregroundColor(platform.badgeColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(platform == "iOS" ?
-                                  Color.blue.opacity(0.1) :
-                                    Color.orange.opacity(0.1))
+                            .fill(platform.badgeColor.opacity(0.1))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(platform == "iOS" ?
-                                    Color.blue.opacity(0.3) :
-                                        Color.orange.opacity(0.3),
-                                    lineWidth: 0.5)
+                            .stroke(platform.badgeColor.opacity(0.3), lineWidth: 0.5)
                     )
                 }
             }
