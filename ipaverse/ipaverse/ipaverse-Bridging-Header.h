@@ -2,5 +2,7 @@
 #define ipaverse_Bridging_Header_h
 
 #include <zlib.h>
+#include <bzlib.h>
+#include "SAPUnicornShim.h"
 
 #endif

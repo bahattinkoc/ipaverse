@@ -88,4 +88,19 @@ ipaverse runs locally on your Mac.
 
 ---
 
+## License
+
+ipaverse itself is [MIT licensed](LICENSE) and fully open source.
+
+One vendored component is licensed differently: the App Store sign-in flow
+statically links [Unicorn Engine](https://github.com/unicorn-engine/unicorn)
+(**GPL-2.0**, see [`ipaverse/Vendor/unicorn/LICENSE`](ipaverse/Vendor/unicorn/LICENSE))
+to emulate Apple's own App Store signing challenge locally on your Mac —
+see [`ipaverse/Vendor/unicorn/README.md`](ipaverse/Vendor/unicorn/README.md)
+for what it does and how it's built. Because ipaverse's full source is
+already public here, GPL-2.0's source-availability requirement for the
+combined binary is satisfied by this repository itself.
+
+---
+
 **Made with ❤️**

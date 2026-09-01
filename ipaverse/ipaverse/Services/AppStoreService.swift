@@ -155,11 +155,8 @@ final class AppStoreService: AppStoreServiceProtocol {
     /// (`auth.itunes.apple.com/auth/v1/native`), which silently rejects the legacy
     /// plist credential body with an empty `200` response. The classic
     /// `pXX-buy.itunes.apple.com/.../authenticate` endpoint still accepts it.
-    private func authenticateURL(authCode: String?, deviceID: String) -> String {
-        let prefix = authCode != nil
-            ? Constant.privateAppStoreAPIDomainPrefixWithAuthCode
-            : Constant.privateAppStoreAPIDomainPrefixWithoutAuthCode
-        return "https://\(prefix)-\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathAuthenticate)?guid=\(deviceID)"
+    private func authenticateURL(host: String, deviceID: String) -> String {
+        return "https://\(host)\(Constant.privateAppStoreAPIPathAuthenticate)?guid=\(deviceID)"
     }
 
     // MARK: - Token Validation
@@ -826,17 +823,113 @@ final class AppStoreService: AppStoreServiceProtocol {
     /// URLSession can't auto-follow because the session delegate cancels these
     /// redirects (to preserve the POST method/body). Returns the final parsed
     /// result containing passwordToken / DSID / storeFront / pod.
+    /// Fetches the live `sign-sap-setup` / `sign-sap-setup-cert` /
+    /// `sign-sap-version` URLs from bag.xml. These are the URLs
+    /// ``SAPSigner`` needs to run the SAP setup handshake — the same bag
+    /// that already supplies `authenticateAccount` conceptually, fetched
+    /// separately here since AppStoreService doesn't otherwise need bag.xml.
+    private func fetchSAPBagInfo() async throws -> (setupURL: URL, certificateURL: URL, version: UInt32) {
+        let bagURLString = "https://\(Constant.privateInitDomain)\(Constant.privateInitPath)"
+        guard let bagURL = URL(string: bagURLString) else { throw LoginError.networkError }
+
+        var request = URLRequest(url: bagURL)
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw LoginError.networkError
+        }
+
+        let normalized = normalizePlistData(data)
+        guard let plist = try? PropertyListSerialization.propertyList(from: normalized, options: [], format: nil) as? [String: Any],
+              let urlBag = plist["urlBag"] as? [String: Any],
+              let setupURLString = urlBag["sign-sap-setup"] as? String,
+              let certURLString = urlBag["sign-sap-setup-cert"] as? String,
+              let versionString = urlBag["sign-sap-version"] as? String,
+              let version = UInt32(versionString),
+              let setupURL = URL(string: setupURLString),
+              let certificateURL = URL(string: certURLString) else {
+            throw LoginError.unknownError("Apple's bag.xml is missing the sign-sap-* keys the App Store signing handshake needs")
+        }
+
+        return (setupURL, certificateURL, version)
+    }
+
+    /// Builds a signer that produces `X-Apple-ActionSignature` values for
+    /// MZFinance authenticate requests — see ``SAPSigner`` for what this
+    /// actually does (emulating Apple's real 2013 FairPlay/CommerceKit code
+    /// to run the same challenge-response a genuine Mac client performs).
+    /// The hardware ID reuses the device's MAC address (the same value
+    /// already used as `guid`), matching how ipatool derives its
+    /// equivalent `machineID` from the same source.
+    private func createSAPSigner(deviceID: String) async throws -> SAPSigner {
+        let bagInfo = try await fetchSAPBagInfo()
+        let bundle = try await SAPAssets.load()
+
+        var hardwareID: [UInt8] = []
+        var hexChars = Array(deviceID)
+        var index = 0
+        while index + 1 < hexChars.count, hardwareID.count < 20 {
+            guard let byte = UInt8(String(hexChars[index...index+1]), radix: 16) else { break }
+            hardwareID.append(byte)
+            index += 2
+        }
+        if hardwareID.isEmpty {
+            hardwareID = Array(deviceID.utf8.prefix(20))
+        }
+        hexChars.removeAll()
+
+        return try await SAPSigner.create(
+            setupURL: bagInfo.setupURL,
+            certificateURL: bagInfo.certificateURL,
+            version: bagInfo.version,
+            hardwareID: hardwareID,
+            bundle: bundle
+        )
+    }
+
     private func authenticateMZFinance(email: String, password: String, deviceID: String) async throws -> LoginParseResult {
+        // MZFinance now requires a signed X-Apple-ActionSignature header on
+        // every authenticate request (confirmed empirically: live nodes
+        // were rejecting even well-formed, PET-authenticated requests with
+        // an empty 403 until this was added) — see SAPSigner for what
+        // actually produces it. One signer/handshake per login attempt;
+        // its `sign()` is called fresh for each retry's request body.
+        let sapSigner: SAPSigner
+        do {
+            sapSigner = try await createSAPSigner(deviceID: deviceID)
+        } catch {
+            throw LoginError.unknownError("Could not establish Apple's App Store signing session: \(error.localizedDescription)")
+        }
+        defer { sapSigner.close() }
+
+        // Apple's edge fleet behind these hostnames is only partially serving
+        // MZFinance right now (verified empirically — see the comment on
+        // privateAppStoreAPIAuthHostFallbacks): each individual request has roughly
+        // a coin-flip chance of landing on a dead node. Rotating across hosts *and*
+        // giving each several passes drives the odds of never hitting a live node
+        // down to a fraction of a percent, without hammering a single host.
+        let hostFallbacks = Constant.privateAppStoreAPIAuthHostFallbacks
+        let roundsPerHost = 4
+        var hostIndex = 0
         var redirect = ""
         var attempt = 1
-        let maxAttempts = 5
+        let maxAttempts = hostFallbacks.count * roundsPerHost
+        var attemptLog: [String] = []
 
         while attempt <= maxAttempts {
-            let urlString = redirect.isEmpty
-                ? authenticateURL(authCode: nil, deviceID: deviceID)
-                : redirect
+            let currentHostDescription: String
+            let urlString: String
+            if !redirect.isEmpty {
+                urlString = redirect
+                currentHostDescription = redirect
+            } else {
+                let host = hostFallbacks[hostIndex % hostFallbacks.count]
+                urlString = authenticateURL(host: host, deviceID: deviceID)
+                currentHostDescription = host
+            }
             let credentials = LoginCredentials(email: email, password: password, authCode: nil)
-            let request = try createLoginRequest(credentials: credentials, deviceID: deviceID, attempt: attempt, url: urlString)
+            let request = try createLoginRequest(credentials: credentials, deviceID: deviceID, attempt: attempt, url: urlString, sapSigner: sapSigner)
 
             logger.logRequest(request)
             let (data, response) = try await session.data(for: request)
@@ -844,17 +937,30 @@ final class AppStoreService: AppStoreServiceProtocol {
 
             guard let httpResponse = response as? HTTPURLResponse else { throw LoginError.networkError }
 
+            // A populated x-responding-instance header means this particular edge
+            // node actually forwarded the request to a live MZFinance backend
+            // (as opposed to a dead node bouncing it with 404/204/empty-403).
+            // Surfaced only for diagnostics — doesn't change control flow.
+            if let instance = httpResponse.value(forHTTPHeaderField: "x-responding-instance"), !instance.isEmpty {
+                print("🔐 [MZFinance] attempt \(attempt) (\(currentHostDescription)) reached live instance: \(instance)")
+            }
+
             let result = try parseLoginResponse(
                 data: data, statusCode: httpResponse.statusCode,
                 attempt: attempt, authCode: nil, httpResponse: httpResponse
             )
 
             if result.shouldRetry {
+                attemptLog.append("attempt \(attempt) (\(currentHostDescription)) -> \(result.retryReason ?? "HTTP \(httpResponse.statusCode)")")
                 if let redirectURL = result.redirectURL {
+                    // Explicit Location header — follow it directly, don't cycle hosts.
                     redirect = redirectURL
                 } else {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    // No redirect target: this edge node is a dead end for MZFinance.
+                    // Cycle to the next fallback host rather than re-hitting the same one.
                     redirect = ""
+                    hostIndex += 1
+                    try? await Task.sleep(nanoseconds: 400_000_000)
                 }
                 attempt += 1
                 continue
@@ -862,10 +968,18 @@ final class AppStoreService: AppStoreServiceProtocol {
             return result
         }
 
-        throw LoginError.unknownError("MZFinance authentication exceeded redirect attempts")
+        throw LoginError.unknownError(
+            "Apple's legacy App Store sign-in bridge (MZFinance) rejected every attempt across all known hosts: "
+            + attemptLog.joined(separator: "; ")
+            + ". Your Apple ID + password were verified successfully by Apple's GrandSlam servers — this failure "
+            + "is happening one step later, in the token exchange with the App Store backend, and is not a bad "
+            + "credentials error. Apple's edge is currently only partially routing this endpoint to a live "
+            + "backend; please try logging in again. This matches a known issue affecting ipatool-style "
+            + "clients (see github.com/majd/ipatool issues #312 and #520)."
+        )
     }
 
-    private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, url urlString: String) throws -> URLRequest {
+    private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, url urlString: String, sapSigner: SAPSigner) throws -> URLRequest {
         guard let url = URL(string: urlString) else {
             throw LoginError.networkError
         }
@@ -903,35 +1017,58 @@ final class AppStoreService: AppStoreServiceProtocol {
             throw LoginError.networkError
         }
 
+        // The piece that was missing entirely before this: Apple's edge
+        // rejects unsigned MZFinance authenticate requests outright (empty
+        // 403, even with a valid PET-as-password) — see SAPSigner.
+        guard let body = request.httpBody else { throw LoginError.networkError }
+        do {
+            let signature = try sapSigner.sign(body)
+            request.setValue(signature.base64EncodedString(), forHTTPHeaderField: "X-Apple-ActionSignature")
+        } catch {
+            throw LoginError.unknownError("Failed to sign App Store authentication request: \(error.localizedDescription)")
+        }
+
         return request
     }
 
     private func parseLoginResponse(data: Data, statusCode: Int, attempt: Int, authCode: String?, httpResponse: HTTPURLResponse) throws -> LoginParseResult {
-        var redirectURL: String? = nil
-
+        // Apple's edge has been observed rejecting this legacy endpoint in several
+        // ways depending on pod/region/time: a plain 404 (route removed), a 403
+        // (edge-level block, HTML body, not a plist), or a 301/302 with no Location
+        // header at all. None of these are a verdict on the credentials — they're
+        // pod-level failures, so they're retried against the next fallback host
+        // rather than surfaced as a hard error immediately.
         if statusCode == 404 {
-            return LoginParseResult(shouldRetry: true)
+            return LoginParseResult(shouldRetry: true, retryReason: "404 Not Found")
         }
 
-        if statusCode == 302 {
+        if statusCode == 403 {
+            return LoginParseResult(shouldRetry: true, retryReason: "403 Forbidden")
+        }
+
+        if statusCode == 301 || statusCode == 302 {
             if let location = httpResponse.value(forHTTPHeaderField: "Location") {
-                redirectURL = location
-                return LoginParseResult(shouldRetry: true, redirectURL: redirectURL)
+                return LoginParseResult(shouldRetry: true, redirectURL: location, retryReason: "\(statusCode) -> \(location)")
             } else {
-                throw LoginError.networkError
+                return LoginParseResult(shouldRetry: true, retryReason: "\(statusCode) without Location header")
             }
         }
 
+        if statusCode == 204 {
+            return LoginParseResult(shouldRetry: true, retryReason: "204 No Content")
+        }
+
         // An empty 200 from the auth endpoint means the request was silently rejected
-        // (e.g. the legacy plist body sent to the new SRP endpoint). Surface this
-        // explicitly instead of a generic network error so it stays diagnosable.
+        // (e.g. the legacy plist body sent to the new SRP endpoint). Retry against the
+        // next fallback host instead of failing immediately.
         if data.isEmpty {
-            throw LoginError.unknownError("The authentication endpoint returned an empty response (status \(statusCode)). The request was likely rejected.")
+            return LoginParseResult(shouldRetry: true, retryReason: "empty response (status \(statusCode))")
         }
 
         let normalizedData = normalizePlistData(data)
         guard let plist = try? PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any] else {
-            throw LoginError.networkError
+            let snippet = String(data: data.prefix(120), encoding: .utf8) ?? "<non-utf8 body>"
+            return LoginParseResult(shouldRetry: true, retryReason: "non-plist body (status \(statusCode)): \(snippet)")
         }
 
         let failureType = plist["failureType"] as? String ?? ""
@@ -956,7 +1093,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         // Transient Apple server error — signal a retry with a fresh bag session
         if failureType == Constant.failureTypeTransientError {
-            return LoginParseResult(shouldRetry: true)
+            return LoginParseResult(shouldRetry: true, retryReason: "failureType 5005 (transient)")
         }
 
         if !failureType.isEmpty {
@@ -1138,6 +1275,10 @@ final class AppStoreService: AppStoreServiceProtocol {
 struct LoginParseResult {
     let shouldRetry: Bool
     let redirectURL: String?
+    /// Human-readable reason a retry was requested (e.g. "404 Not Found",
+    /// "403 Forbidden", "301 without Location"). Used to build a diagnosable
+    /// error if every fallback host is exhausted.
+    let retryReason: String?
     let accountName: String?
     let storeFront: String?
     let passwordToken: String?
@@ -1147,6 +1288,7 @@ struct LoginParseResult {
     init(
         shouldRetry: Bool,
         redirectURL: String? = nil,
+        retryReason: String? = nil,
         accountName: String? = nil,
         storeFront: String? = nil,
         passwordToken: String? = nil,
@@ -1155,6 +1297,7 @@ struct LoginParseResult {
     ) {
         self.shouldRetry = shouldRetry
         self.redirectURL = redirectURL
+        self.retryReason = retryReason
         self.accountName = accountName
         self.storeFront = storeFront
         self.passwordToken = passwordToken
@@ -1225,8 +1368,27 @@ private extension AppStoreService {
         static let iTunesAPIPathSearch = "/search"
         static let iTunesAPIPathLookup = "/lookup"
 
-        static let privateAppStoreAPIDomainPrefixWithoutAuthCode = "p25"
-        static let privateAppStoreAPIDomainPrefixWithAuthCode = "p71"
+        // Empirically verified (Aug 2026, live curl probes against Apple's edge):
+        // https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate
+        // (unprefixed) is still the exact URL Apple's own bag.xml advertises under
+        // `authenticateAccount` — the old "point it to the new SRP endpoint" theory
+        // did not hold up. What actually happens is that the request lands on a
+        // fleet of edge nodes behind buy.itunes.apple.com/pXX-buy.itunes.apple.com,
+        // and only *some* of those nodes still run the MZFinance service — those
+        // reply with a real (non-empty) response and an `x-responding-instance:
+        // MZFinance:...` header. The rest are dead ends: 404 (route not present on
+        // that node), 204 (empty), or 403 with no body. Same request, same
+        // credentials, repeated back-to-back against p25/p71/unprefixed all show
+        // this ~40-60% dead-end rate in probing — it is not host-specific, it's
+        // edge-fleet inconsistency. So the fix is not "pick the right host", it's
+        // cycling across hosts *and* retrying enough times to land on a live node.
+        // See https://github.com/majd/ipatool/issues/312 and /issues/520 for the
+        // same failure mode independently reported against this exact endpoint.
+        static let privateAppStoreAPIAuthHostFallbacks = [
+            "buy.itunes.apple.com",
+            "p25-buy.itunes.apple.com",
+            "p71-buy.itunes.apple.com"
+        ]
         static let privateAppStoreAPIDomain = "buy." + iTunesAPIDomain
         static let privateAppStoreAPIPathAuthenticate = "/WebObjects/MZFinance.woa/wa/authenticate"
         static let privateAppStoreAPIPathPurchase = "/WebObjects/MZFinance.woa/wa/buyProduct"

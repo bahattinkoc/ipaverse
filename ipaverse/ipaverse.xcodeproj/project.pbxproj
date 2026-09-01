@@ -8,11 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A02E42B9470094874D /* libz.tbd */; };
+		6B87C4A32E42B9470094875B /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A22E42B9470094875A /* libbz2.tbd */; };
+		6B87C4A52E42B9470094875D /* libunicorn.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A42E42B9470094875C /* libunicorn.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		6B87C4832E42B9450094874D /* ipaverse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ipaverse.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B87C4A02E42B9470094874D /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
+		6B87C4A22E42B9470094875A /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
+		6B87C4A42E42B9470094875C /* libunicorn.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libunicorn.a; path = Vendor/unicorn/lib/libunicorn.a; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -29,6 +33,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */,
+				6B87C4A32E42B9470094875B /* libbz2.tbd in Frameworks */,
+				6B87C4A52E42B9470094875D /* libunicorn.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -56,6 +62,8 @@
 			isa = PBXGroup;
 			children = (
 				6B87C4A02E42B9470094874D /* libz.tbd */,
+				6B87C4A22E42B9470094875A /* libbz2.tbd */,
+				6B87C4A42E42B9470094875C /* libunicorn.a */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -279,6 +287,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/unicorn/include";
 				INFOPLIST_KEY_CFBundleDisplayName = ipaverse;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -286,6 +295,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/unicorn/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ipaverse;
@@ -312,6 +322,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/unicorn/include";
 				INFOPLIST_KEY_CFBundleDisplayName = ipaverse;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -319,6 +330,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/unicorn/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ipaverse;
