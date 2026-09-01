@@ -33,12 +33,10 @@ struct Account: Codable, Equatable {
     let storeFront: String
     let passwordToken: String
     let directoryServicesID: String
-    let password: String
     let pod: String?
-    
+
     init(
         email: String,
-        password: String = "",
         name: String,
         storeFront: String,
         passwordToken: String,
@@ -46,7 +44,6 @@ struct Account: Codable, Equatable {
         pod: String? = nil
     ) {
         self.email = email
-        self.password = password
         self.name = name
         self.storeFront = storeFront
         self.passwordToken = passwordToken
@@ -104,6 +101,10 @@ enum LoginError: LocalizedError, Equatable {
     case accountLocked
     case tokenExpired
     case licenseRequired
+    /// Apple's servers verified the credentials but the legacy App Store token
+    /// exchange (MZFinance) couldn't reach a live backend node on any fallback host.
+    /// Distinct from `invalidCredentials` — the password was correct.
+    case serviceTemporarilyUnavailable
     case unknownError(String)
 
     var errorDescription: String? {
@@ -115,6 +116,7 @@ enum LoginError: LocalizedError, Equatable {
         case .accountLocked: "Account locked"
         case .tokenExpired: "Session expired. Please login again."
         case .licenseRequired: "License required"
+        case .serviceTemporarilyUnavailable: "Apple's servers are temporarily unavailable. Please try again in a moment."
         case .unknownError(let message): message
         }
     }

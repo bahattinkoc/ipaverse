@@ -13,7 +13,12 @@ final class LoginVM: ObservableObject {
 
     // MARK: - PUBLISHED PROPERTIES
 
-    @Published var loginState: LoginState = .loading
+    @Published var loginState: LoginState = .idle
+    /// Gates the launch-time splash screen. Distinct from `loginState == .loading` (which also
+    /// covers interactive login/2FA submissions) so that submitting the form never tears down
+    /// and remounts `LoginView` — doing so previously reset the email field and wiped the error
+    /// message on every failed login attempt (see `checkExistingLogin`).
+    @Published var isCheckingExistingSession: Bool = true
     @Published var email: String = ""
     @Published var password: String = ""
     @Published var authCode: String = ""
@@ -294,8 +299,8 @@ final class LoginVM: ObservableObject {
         if let account = keychainService.getAccount() {
             Task {
                 do {
-                    let isValid = try await appStoreService.validateToken(account.passwordToken)
-                    if isValid {
+                    let hasValidFormat = try await appStoreService.hasValidTokenFormat(account.passwordToken)
+                    if hasValidFormat {
                         loginState = .success(account)
                         saveUserEmail()
                     } else {
@@ -306,10 +311,12 @@ final class LoginVM: ObservableObject {
                     loginState = .idle
                     showAccountPicker = !savedProfiles.isEmpty
                 }
+                isCheckingExistingSession = false
             }
         } else {
             loginState = .idle
             showAccountPicker = !savedProfiles.isEmpty
+            isCheckingExistingSession = false
         }
     }
 
@@ -418,7 +425,6 @@ extension LoginVM {
     private func applyStoreFront(_ storeFront: String, to account: Account) {
         let updated = Account(
             email: account.email,
-            password: account.password,
             name: account.name,
             storeFront: storeFront,
             passwordToken: account.passwordToken,

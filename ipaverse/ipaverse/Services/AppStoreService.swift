@@ -13,7 +13,7 @@ import IOKit
 
 protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
-    func validateToken(_ token: String) async throws -> Bool
+    func hasValidTokenFormat(_ token: String) async throws -> Bool
     func logout() async throws
     func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
     func lookup(bundleID: String, account: Account, platform: AppPlatform) async throws -> AppStoreApp
@@ -139,7 +139,6 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         return Account(
             email: credentials.email,
-            password: credentials.password,
             name: parsed.accountName ?? fallbackName,
             storeFront: parsed.storeFront ?? "143441",
             passwordToken: parsed.passwordToken ?? "",
@@ -160,7 +159,12 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     // MARK: - Token Validation
-    func validateToken(_ token: String) async throws -> Bool {
+
+    /// Checks whether `token` merely *looks like* a token (non-empty, long enough, expected
+    /// character set). This is a local, offline format check only — it does NOT verify with
+    /// Apple's servers that the token is still valid/unexpired/unrevoked. A token that passes
+    /// this check can still be rejected on the next real API call.
+    func hasValidTokenFormat(_ token: String) async throws -> Bool {
         guard !token.isEmpty else {
             return false
         }
@@ -175,6 +179,27 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         return true
+    }
+
+    // MARK: - Header Helpers
+
+    /// Sets the account's DSID under both header names Apple's private API endpoints expect.
+    private func setDSIDHeaders(_ dsid: String, on request: inout URLRequest) {
+        request.setValue(dsid, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(dsid, forHTTPHeaderField: "X-Dsid")
+    }
+
+    /// Applies the standard headers required by Apple's private App Store plist API: content
+    /// type, user agent, and the account's DSID. Pass `includeStoreFrontAndToken: true` for
+    /// endpoints that also require the storefront and password token (e.g. purchase).
+    private func applyAppStoreHeaders(to request: inout URLRequest, account: Account, includeStoreFrontAndToken: Bool = false) {
+        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        setDSIDHeaders(account.directoryServicesID, on: &request)
+        if includeStoreFrontAndToken {
+            request.setValue(account.storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
+            request.setValue(account.passwordToken, forHTTPHeaderField: "X-Token")
+        }
     }
 
     // MARK: - Logout
@@ -342,12 +367,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
-        request.setValue(account.storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
-        request.setValue(account.passwordToken, forHTTPHeaderField: "X-Token")
+        applyAppStoreHeaders(to: &request, account: account, includeStoreFrontAndToken: true)
 
         let payload: [String: Any] = [
             "appExtVrsId": "0",
@@ -467,10 +487,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        applyAppStoreHeaders(to: &request, account: account)
 
         let payload: [String: Any] = [
             "creditDisplay": "",
@@ -525,10 +542,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        applyAppStoreHeaders(to: &request, account: account)
 
         var payload: [String: Any] = [
             "creditDisplay": "",
@@ -637,8 +651,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var request = URLRequest(url: sourceURL)
         request.httpMethod = "GET"
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(dsid, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(dsid, forHTTPHeaderField: "X-Dsid")
+        setDSIDHeaders(dsid, on: &request)
 
         logger.logRequest(request)
 
@@ -714,10 +727,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        applyAppStoreHeaders(to: &request, account: account)
 
         let payload: [String: Any] = [
             "creditDisplay": "",
@@ -775,10 +785,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "iCloud-DSID")
-        request.setValue(account.directoryServicesID, forHTTPHeaderField: "X-Dsid")
+        applyAppStoreHeaders(to: &request, account: account)
 
         let payload: [String: Any] = [
             "creditDisplay": "",
@@ -977,15 +984,10 @@ final class AppStoreService: AppStoreServiceProtocol {
             return result
         }
 
-        throw LoginError.unknownError(
-            "Apple's legacy App Store sign-in bridge (MZFinance) rejected every attempt across all known hosts: "
-            + attemptLog.joined(separator: "; ")
-            + ". Your Apple ID + password were verified successfully by Apple's GrandSlam servers — this failure "
-            + "is happening one step later, in the token exchange with the App Store backend, and is not a bad "
-            + "credentials error. Apple's edge is currently only partially routing this endpoint to a live "
-            + "backend; please try logging in again. This matches a known issue affecting ipatool-style "
-            + "clients (see github.com/majd/ipatool issues #312 and #520)."
-        )
+        // Full per-attempt diagnostic stays in the console for debugging — the user
+        // doesn't need host names or HTTP status codes, just that it's worth retrying.
+        print("🔐 [MZFinance] exhausted all \(maxAttempts) attempts across all hosts: \(attemptLog.joined(separator: "; "))")
+        throw LoginError.serviceTemporarilyUnavailable
     }
 
     private func createLoginRequest(credentials: LoginCredentials, deviceID: String, attempt: Int, url urlString: String, sapSigner: SAPSigner) throws -> URLRequest {

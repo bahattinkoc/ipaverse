@@ -13,20 +13,22 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            switch loginViewModel.loginState {
-            case .loading:
+            if loginViewModel.isCheckingExistingSession {
                 SplashView()
-                
-            case .idle, .error, .requires2FA:
-                LoginView()
-                    .environmentObject(loginViewModel)
+            } else {
+                switch loginViewModel.loginState {
+                case .loading, .idle, .error, .requires2FA:
+                    LoginView()
+                        .environmentObject(loginViewModel)
 
-            case .success(let account):
-                MainView(account: account)
-                    .environmentObject(loginViewModel)
+                case .success(let account):
+                    MainView(account: account)
+                        .environmentObject(loginViewModel)
+                }
             }
         }
         .animation(.easeInOut, value: loginViewModel.loginState)
+        .animation(.easeInOut, value: loginViewModel.isCheckingExistingSession)
     }
 }
 
