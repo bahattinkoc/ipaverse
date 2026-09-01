@@ -10,7 +10,20 @@ import SwiftData
 
 enum AppPlatform: String, CaseIterable, Codable {
     case ios = "iOS"
+    case ipados = "iPadOS"
     case macos = "macOS"
+    case tvos = "tvOS"
+    case visionos = "visionOS"
+
+    var iconName: String {
+        switch self {
+        case .ios: return "iphone"
+        case .ipados: return "ipad"
+        case .macos: return "macbook"
+        case .tvos: return "tv"
+        case .visionos: return "vision.pro"
+        }
+    }
 }
 
 struct AppStoreApp: Codable, Identifiable, Equatable {

@@ -65,10 +65,18 @@ struct SearchView: View {
                                 .font(.title2)
                                 .fontWeight(.semibold)
 
-                            Text("Try searching for a different app")
-                                .font(.body)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
+                            if viewModel.selectedPlatform == .visionos && !viewModel.isLookupMode {
+                                Text("Apple's search API doesn't index native visionOS-only apps by name. Enter the app's exact Bundle ID instead (e.g. com.example.app) to find it.")
+                                    .font(.body)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32)
+                            } else {
+                                Text("Try searching for a different app")
+                                    .font(.body)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if viewModel.searchText.isEmpty {
@@ -217,7 +225,7 @@ struct SearchView: View {
                             }
                         }) {
                             HStack(spacing: 4) {
-                                Image(systemName: platform == .ios ? "iphone" : "macbook")
+                                Image(systemName: platform.iconName)
                                     .font(.system(size: 10, weight: .medium))
 
                                 Text(platform.rawValue)

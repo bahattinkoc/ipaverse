@@ -16,7 +16,7 @@ struct ipaverseApp: App {
         Window("ipaverse", id: "main") {
             ContentView()
                 .environmentObject(loginViewModel)
-                .fixedWindow(width: 450, height: 820)
+                .fixedWindow(width: 560, height: 820)
         }
         .windowResizability(.contentSize)
         .modelContainer(for: DownloadedApp.self)

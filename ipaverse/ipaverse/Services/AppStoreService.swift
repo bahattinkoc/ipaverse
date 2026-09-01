@@ -218,9 +218,15 @@ final class AppStoreService: AppStoreServiceProtocol {
         let entity: String
         switch platform {
         case .ios:
-            entity = "software,iPadSoftware"
+            entity = "software"
+        case .ipados:
+            entity = "iPadSoftware"
         case .macos:
             entity = "macSoftware"
+        case .tvos:
+            entity = "software,tvSoftware"
+        case .visionos:
+            entity = "xrosSoftware"
         }
 
         let urlString = "https://\(Constant.iTunesAPIDomain)\(Constant.iTunesAPIPathSearch)?entity=\(entity)&limit=\(limit)&media=software&term=\(term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.localizedLowercase ?? term)&country=\(countryCode)"
@@ -268,8 +274,11 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         let entity: String
         switch platform {
-        case .ios: entity = "software,iPadSoftware"
+        case .ios: entity = "software"
+        case .ipados: entity = "iPadSoftware"
         case .macos: entity = "macSoftware"
+        case .tvos: entity = "tvSoftware"
+        case .visionos: entity = "xrosSoftware"
         }
 
         let encodedID = bundleID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? bundleID
