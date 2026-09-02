@@ -284,6 +284,34 @@ struct ResigningView: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            // Security Testing Mode
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: $viewModel.enableSecurityTestingMode) {
+                    Label("Security Testing Mode", systemImage: "ladybug")
+                        .font(.subheadline)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Text("Disables ATS (NSAllowsArbitraryLoads) so a proxy like Burp or mitmproxy can intercept this app's traffic. Signed builds are always debuggable (get-task-allow). Does not bypass in-app certificate pinning.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle(isOn: $viewModel.enableFridaGadgetInjection) {
+                    Label("Inject Frida Gadget", systemImage: "syringe")
+                        .font(.subheadline)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.top, 6)
+
+                Text("Embeds a Frida agent in the app for runtime instrumentation (e.g. bypassing SSL pinning) — no jailbreak needed. After install, attach from your Mac with: frida -H <device-ip>:27042 -n Gadget -l script.js")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal)
         .padding(.top, 14)

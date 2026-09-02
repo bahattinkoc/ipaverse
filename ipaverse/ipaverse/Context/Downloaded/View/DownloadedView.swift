@@ -27,6 +27,7 @@ struct DownloadedView: View {
     @State private var appToSign: DownloadedApp?
     @State private var installContext: IPAInstallContext?
     @State private var appToScan: DownloadedApp?
+    @State private var appToDump: DownloadedApp?
     @State private var isDropTargeted = false
     @State private var importError: String?
 
@@ -92,6 +93,12 @@ struct DownloadedView: View {
                                 Label("Security Scan", systemImage: "shield.lefthalf.filled")
                             }
 
+                            Button {
+                                appToDump = downloadedApp
+                            } label: {
+                                Label("Dump Decrypted Copy", systemImage: "lock.open.trianglebadge.exclamationmark")
+                            }
+
                             Divider()
 
                             Button(role: .destructive) {
@@ -149,6 +156,9 @@ struct DownloadedView: View {
         }
         .sheet(item: $appToScan) { app in
             SecurityScanView(ipaPath: app.filePath, appName: app.name)
+        }
+        .sheet(item: $appToDump) { app in
+            DumpView(downloadedApp: app)
         }
         .alert("Import Failed", isPresented: Binding(
             get: { importError != nil },

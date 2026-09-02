@@ -99,6 +99,8 @@ final class ResigningVM: ObservableObject {
     @Published var isAddingKey = false
     @Published var newKeyName = ""
     @Published var newKeyValue = ""
+    @Published var enableSecurityTestingMode = false
+    @Published var enableFridaGadgetInjection = false
 
     let downloadedApp: DownloadedApp
 
@@ -258,7 +260,9 @@ final class ResigningVM: ObservableObject {
                 .map { ($0.key, $0.toAny()) }
             ),
             fileReplacements: fileReplacements,
-            provisioningProfileURL: provisioningProfileURL
+            provisioningProfileURL: provisioningProfileURL,
+            enableSecurityTestingMode: enableSecurityTestingMode,
+            enableFridaGadgetInjection: enableFridaGadgetInjection
         )
         let ipaPath = downloadedApp.filePath
 

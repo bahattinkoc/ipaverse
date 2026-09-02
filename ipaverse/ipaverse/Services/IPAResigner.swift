@@ -37,6 +37,13 @@ struct ResignConfig: @unchecked Sendable {
     let plistEdits: [String: Any]
     let fileReplacements: [String: Data]
     let provisioningProfileURL: URL?
+    /// Disables ATS (NSAllowsArbitraryLoads) so the signed app's traffic can be
+    /// intercepted by a MITM proxy (Burp, mitmproxy) for security testing.
+    /// Does not bypass in-app certificate/public-key pinning.
+    var enableSecurityTestingMode: Bool = false
+    /// Injects the Frida Gadget into the app so it can be instrumented from a
+    /// host machine without a jailbreak. See DylibInjector.
+    var enableFridaGadgetInjection: Bool = false
 }
 
 struct IPAFileNode: Identifiable, Sendable {
@@ -300,14 +307,24 @@ struct IPAResigner {
         }
         print("⚙️ [IPAResigner] ✓ Not FairPlay encrypted (cryptid=0)")
 
-        // 3. Apply Info.plist edits
-        if !config.plistEdits.isEmpty {
+        // 3. Apply Info.plist edits (+ Security Testing Mode ATS bypass)
+        if !config.plistEdits.isEmpty || config.enableSecurityTestingMode {
             progress("Applying changes...")
             var plist = (try? PropertyListSerialization.propertyList(
                 from: Data(contentsOf: infoPlistURL), options: [], format: nil
             ) as? [String: Any]) ?? [:]
             let originalBundleID = plist["CFBundleIdentifier"] as? String ?? ""
             for (key, value) in config.plistEdits { plist[key] = value }
+
+            if config.enableSecurityTestingMode {
+                // Merge rather than overwrite so any existing NSExceptionDomains
+                // configuration set by the original developer is preserved.
+                var ats = plist["NSAppTransportSecurity"] as? [String: Any] ?? [:]
+                ats["NSAllowsArbitraryLoads"] = true
+                plist["NSAppTransportSecurity"] = ats
+                print("⚙️ [IPAResigner] Security Testing Mode: NSAllowsArbitraryLoads=true")
+            }
+
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
             try data.write(to: infoPlistURL)
 
@@ -320,7 +337,7 @@ struct IPAResigner {
 
         // 4. Apply file replacements
         if !config.fileReplacements.isEmpty {
-            if config.plistEdits.isEmpty { progress("Applying changes...") }
+            if config.plistEdits.isEmpty && !config.enableSecurityTestingMode { progress("Applying changes...") }
             for (relativePath, data) in config.fileReplacements {
                 let fileURL = workDir.appendingPathComponent(relativePath)
                 try FileManager.default.createDirectory(
@@ -328,6 +345,12 @@ struct IPAResigner {
                 )
                 try data.write(to: fileURL)
             }
+        }
+
+        // 4.5 Inject Frida Gadget (Security Testing Mode: dynamic instrumentation
+        // without a jailbreak — attach with `frida -H <device-ip>:27042 -n Gadget`)
+        if config.enableFridaGadgetInjection {
+            try DylibInjector.injectFridaGadget(appURL: appURL, mainBinaryURL: mainBinaryURL, progress: progress)
         }
 
         // 5. Remove old signatures and original mobileprovision
