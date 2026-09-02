@@ -281,10 +281,17 @@ struct FridaDumper {
 
         let context = DumpContext(gBytesGetData: api.gBytesGetData)
         let contextPtr = Unmanaged.passUnretained(context).toOpaque()
+        // `fridaDumpMessageCallback` referenced directly is a "thick" Swift function
+        // value (function pointer + context word); GCallback is a "thin" bare C
+        // pointer. Casting straight to GCallback via unsafeBitCast trips a runtime
+        // size-mismatch trap. Assigning to an explicitly @convention(c)-typed
+        // constant first makes the compiler emit the thin form, which IS safely
+        // bit-castable to GCallback (same size, just a different declared arity).
+        let thinCallback: MessageCallback = fridaDumpMessageCallback
         _ = api.gSignalConnectData(
             UnsafeMutableRawPointer(script),
             "message",
-            unsafeBitCast(fridaDumpMessageCallback, to: GCallback.self),
+            unsafeBitCast(thinCallback, to: GCallback.self),
             contextPtr,
             nil,
             0
@@ -431,6 +438,8 @@ struct FridaDumper {
         return out
     }
 }
+
+private typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, OpaquePointer?, UnsafeMutableRawPointer?) -> Void
 
 /// Top-level C function pointer for the FridaScript "message" signal — Swift
 /// closures can't be used as C callbacks since they can't capture context, so
