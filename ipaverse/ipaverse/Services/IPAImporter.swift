@@ -66,29 +66,37 @@ struct IPAImporter {
     /// (`appId_bundleID_version`) already exists, its file path and date are updated
     /// instead of inserting a duplicate. Returns the inserted/updated record so
     /// callers can tag it (e.g. `sourceTag`) without a second fetch.
+    ///
+    /// The actual file work (unzip listing, Info.plist parsing, icon
+    /// extraction) runs off the main actor — those calls were previously made
+    /// directly from this `@MainActor` function and could visibly freeze the
+    /// UI for a couple of seconds on a large IPA. Only the SwiftData
+    /// fetch/insert/save at the end touches `context`, which needs to stay
+    /// on the main actor.
     @discardableResult
     @MainActor
-    static func importIPA(at ipaURL: URL, into context: ModelContext) throws -> DownloadedApp {
-        let app = try metadata(for: ipaURL)
-        // Prefer the app's build date (from the IPA) over "now" for imported apps.
-        let date = IPAResigner.appBuildDate(ipaPath: ipaURL.path) ?? Date()
-        let imported = DownloadedApp(app: app, downloadDate: date, filePath: ipaURL.path)
+    static func importIPA(at ipaURL: URL, into context: ModelContext) async throws -> DownloadedApp {
+        let imported = try await Task.detached(priority: .userInitiated) { () -> DownloadedApp in
+            let app = try metadata(for: ipaURL)
+            // Prefer the app's build date (from the IPA) over "now" for imported apps.
+            let date = IPAResigner.appBuildDate(ipaPath: ipaURL.path) ?? Date()
+            let prepared = DownloadedApp(app: app, downloadDate: date, filePath: ipaURL.path)
+            // Extract the embedded app icon to a local cache so the row shows it.
+            // Best-effort: a missing icon must not fail the import.
+            prepared.iconURL = cacheIcon(for: prepared.id, ipaURL: ipaURL)
+            return prepared
+        }.value
+
         let identity = imported.id
-
-        // Extract the embedded app icon to a local cache so the row shows it.
-        // Best-effort: a missing icon must not fail the import.
-        let iconURLString = cacheIcon(for: identity, ipaURL: ipaURL)
-        imported.iconURL = iconURLString
-
         let descriptor = FetchDescriptor<DownloadedApp>(
             predicate: #Predicate<DownloadedApp> { $0.id == identity }
         )
 
         let result: DownloadedApp
         if let existing = try context.fetch(descriptor).first {
-            existing.filePath = ipaURL.path
-            existing.downloadDate = date
-            if let iconURLString { existing.iconURL = iconURLString }
+            existing.filePath = imported.filePath
+            existing.downloadDate = imported.downloadDate
+            if let iconURLString = imported.iconURL { existing.iconURL = iconURLString }
             result = existing
         } else {
             context.insert(imported)
@@ -96,6 +104,30 @@ struct IPAImporter {
         }
         try context.save()
         return result
+    }
+
+    /// Whether the IPA's main binary is *not* FairPlay-encrypted — i.e. it's
+    /// already a decrypted, re-signable copy rather than a raw App Store
+    /// download. Pulls just the main executable out of the zip (same
+    /// approach as `ResigningVM`'s entitlement check) instead of extracting
+    /// the whole IPA. Returns `false` (don't tag) if this can't be determined.
+    static func isDecrypted(ipaURL: URL) -> Bool {
+        guard let entries = try? IPAResigner.listEntries(ipaPath: ipaURL.path),
+              let appDirEntry = entries.first(where: {
+                  $0.hasSuffix(".app/") && $0.hasPrefix("Payload/") && $0.components(separatedBy: "/").count == 3
+              })
+        else { return false }
+
+        let appName = String(appDirEntry.dropFirst("Payload/".count).dropLast(".app/".count))
+        let binaryEntry = "Payload/\(appName).app/\(appName)"
+        guard let data = try? IPAResigner.readEntry(ipaPath: ipaURL.path, entryName: binaryEntry), !data.isEmpty else {
+            return false
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        guard (try? data.write(to: tempURL)) != nil else { return false }
+        return !IPAResigner.isFairPlayEncrypted(binaryURL: tempURL)
     }
 
     // MARK: - Icon cache

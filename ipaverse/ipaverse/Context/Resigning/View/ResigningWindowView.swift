@@ -25,6 +25,7 @@ struct ResigningWindowView: View {
     @State private var importError: String?
     @State private var installContext: IPAInstallContext?
     @State private var didLookUp = false
+    @State private var isImporting = false
 
     var body: some View {
         Group {
@@ -72,6 +73,23 @@ struct ResigningWindowView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay {
+            if isImporting {
+                ZStack {
+                    Color.black.opacity(0.15)
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Importing…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isImporting)
     }
 
     private func lookUpInitialApp() {
@@ -91,7 +109,7 @@ struct ResigningWindowView: View {
         }
         panel.begin { result in
             guard result == .OK, let url = panel.url else { return }
-            importAndLoad(url)
+            Task { await importAndLoad(url) }
         }
     }
 
@@ -99,14 +117,16 @@ struct ResigningWindowView: View {
         guard let provider = providers.first else { return false }
         _ = provider.loadObject(ofClass: URL.self) { url, _ in
             guard let url, url.pathExtension.lowercased() == "ipa" else { return }
-            DispatchQueue.main.async { importAndLoad(url) }
+            DispatchQueue.main.async { Task { await importAndLoad(url) } }
         }
         return true
     }
 
-    private func importAndLoad(_ url: URL) {
+    private func importAndLoad(_ url: URL) async {
+        isImporting = true
+        defer { isImporting = false }
         do {
-            let app = try IPAImporter.importIPA(at: url, into: modelContext)
+            let app = try await IPAImporter.importIPA(at: url, into: modelContext)
             resolvedApp = app
         } catch {
             importError = error.localizedDescription

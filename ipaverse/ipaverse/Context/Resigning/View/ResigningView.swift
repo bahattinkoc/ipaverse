@@ -43,9 +43,11 @@ struct ResigningView: View {
             guard case .signed(let outputPath) = newValue else { return }
             // Surface the resigned output in Downloaded, tagged, instead of
             // leaving it as an invisible file the user has to know to look for.
-            let imported = try? IPAImporter.importIPA(at: URL(fileURLWithPath: outputPath), into: modelContext)
-            imported?.sourceTag = "Resigned"
-            try? modelContext.save()
+            Task {
+                let imported = try? await IPAImporter.importIPA(at: URL(fileURLWithPath: outputPath), into: modelContext)
+                imported?.sourceTag = "Resigned"
+                try? modelContext.save()
+            }
         }
         .alert("FairPlay Encrypted", isPresented: Binding(
             get: { viewModel.isFairPlayWarning },

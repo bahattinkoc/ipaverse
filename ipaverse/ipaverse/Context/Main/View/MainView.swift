@@ -72,21 +72,47 @@ struct MainView: View {
     private var footer: some View {
         VStack(spacing: 0) {
             Divider()
-            HStack {
+            ZStack {
+                // Centered independent of the trailing text's width. Stays
+                // in the layout at all times (just invisible when off) so
+                // the pill's own height doesn't make the footer taller only
+                // while Evil Mode is on.
+                evilModePill
+                    .opacity(isEvilMode ? 1 : 0)
+                    .allowsHitTesting(isEvilMode)
+
                 HStack(spacing: 4) {
+                    Spacer()
                     Text(Bundle.main.appName)
-                    if isEvilMode {
-                        Text("· Evil Mode")
-                            .foregroundColor(.red)
-                    }
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                    Text("v\(Bundle.main.shortVersion)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
-                Spacer()
-                Text("v\(Bundle.main.shortVersion)")
             }
-            .font(.caption2)
-            .foregroundColor(.secondary.opacity(0.6))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+    }
+
+    /// Same tinted-fill + matching-stroke treatment as the `Resigned`/
+    /// `Decrypted` source-tag badges in the Downloaded list, so this reads
+    /// as the app's existing status-tag language rather than a one-off.
+    private var evilModePill: some View {
+        Label("EVIL MODE", systemImage: "flame.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(.red)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.red.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.red.opacity(0.32), lineWidth: 1)
+            )
     }
 }

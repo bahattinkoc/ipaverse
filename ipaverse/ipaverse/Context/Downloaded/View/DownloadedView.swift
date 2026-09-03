@@ -24,6 +24,8 @@ struct DownloadedView: View {
     @State private var appToDump: DownloadedApp?
     @State private var isDropTargeted = false
     @State private var importError: String?
+    @State private var importingCount = 0
+    private var isImporting: Bool { importingCount > 0 }
     /// Gates "Dump Decrypted Copy" — pulls FairPlay-decrypted bytes out of a
     /// jailbroken device's live memory via Frida — behind Evil Mode.
     @AppStorage("evilModeEnabled") private var isEvilMode = false
@@ -132,6 +134,23 @@ struct DownloadedView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay {
+                if isImporting {
+                    ZStack {
+                        Color.black.opacity(0.15)
+                        VStack(spacing: 10) {
+                            ProgressView()
+                            Text("Importing…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(20)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isImporting)
         }
         .onAppear {
             loadDownloadedApps()
@@ -180,17 +199,33 @@ struct DownloadedView: View {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url, url.pathExtension.lowercased() == "ipa" else { return }
                 DispatchQueue.main.async {
-                    importIPAs(from: [url])
+                    Task { await importIPAs(from: [url]) }
                 }
             }
         }
         return true
     }
 
-    private func importIPAs(from urls: [URL]) {
+    /// `importingCount` (rather than a plain `Bool`) so overlapping drops —
+    /// each one its own `Task` — don't clear the loading indicator while a
+    /// sibling import is still running.
+    private func importIPAs(from urls: [URL]) async {
+        importingCount += 1
+        defer { importingCount -= 1 }
+
         for url in urls {
             do {
-                try IPAImporter.importIPA(at: url, into: modelContext)
+                let imported = try await IPAImporter.importIPA(at: url, into: modelContext)
+                let decrypted = await Task.detached(priority: .userInitiated) {
+                    IPAImporter.isDecrypted(ipaURL: url)
+                }.value
+                // Always re-derive the tag from the file that was just
+                // dropped, even when it's replacing an existing record via
+                // `importIPA`'s upsert — otherwise a stale "Decrypted" from
+                // a previous drop of the same app lingers on a plain/
+                // encrypted IPA dropped in afterward.
+                imported.sourceTag = decrypted ? "Decrypted" : nil
+                try? modelContext.save()
             } catch {
                 importError = error.localizedDescription
             }

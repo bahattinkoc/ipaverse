@@ -120,13 +120,17 @@ struct DumpView: View {
                     .buttonStyle(.bordered)
             }
             Button(viewModel.outputFilePath == nil ? "Cancel" : "Done") {
-                if let path = viewModel.outputFilePath {
-                    let imported = try? IPAImporter.importIPA(at: URL(fileURLWithPath: path), into: modelContext)
+                guard let path = viewModel.outputFilePath else {
+                    dismiss()
+                    return
+                }
+                Task {
+                    let imported = try? await IPAImporter.importIPA(at: URL(fileURLWithPath: path), into: modelContext)
                     imported?.sourceTag = "Decrypted"
                     try? modelContext.save()
                     onImported?()
+                    dismiss()
                 }
-                dismiss()
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isDumping)
