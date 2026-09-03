@@ -6,12 +6,17 @@
 	     Unicorn Engine (statically linked, see Vendor/unicorn/) allocates
 	     RWX pages at runtime to run the emulated Apple FairPlay/CommerceKit
 	     code. App Sandbox is not enabled in this project, so these are
-	     additive under Hardened Runtime only. No disable-library-validation
-	     entitlement is needed since Unicorn is statically linked, not a
-	     separately-signed dylib. -->
+	     additive under Hardened Runtime only. -->
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<!-- Required by FridaRuntime/FridaDumper and the libimobiledevice bundle
+	     (Services/), which dlopen() dylibs downloaded at runtime (Frida,
+	     libimobiledevice + deps). Those are ad-hoc signed but carry no Team
+	     ID matching ipaverse's own — without this entitlement, Hardened
+	     Runtime's library validation refuses to load them. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
 </dict>
 </plist>

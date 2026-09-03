@@ -4,5 +4,6 @@
 #include <zlib.h>
 #include <bzlib.h>
 #include "SAPUnicornShim.h"
+#include "frida-core.h"
 
 #endif

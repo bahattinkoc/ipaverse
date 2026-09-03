@@ -131,7 +131,26 @@ final class DeviceInstallVM: ObservableObject {
         let needBound = !didResolveBinding
 
         let result = await Task.detached { () -> ([ConnectedDevice], String?, String?) in
-            let devices = (try? DeviceInstaller.listDevices()) ?? []
+            var devices = (try? DeviceInstaller.listDevices()) ?? []
+            // devicectl can list an iOS 16-or-earlier device but can never install
+            // to it (its live tunnel needs RemoteXPC, an iOS 17+-only service) — it
+            // just sits at isAvailable=false forever. Fall back to the classic
+            // usbmuxd/lockdownd stack for exactly those devices.
+            let classicDevices: [ConnectedDevice]
+            do {
+                classicDevices = try ClassicDeviceInstaller.listDevices()
+                print("⚙️ [DeviceInstallVM] classic backend found \(classicDevices.count) device(s)")
+            } catch {
+                print("⚙️ [DeviceInstallVM] classic backend failed: \(error)")
+                classicDevices = []
+            }
+            for classicDevice in classicDevices {
+                if let idx = devices.firstIndex(where: { $0.id == classicDevice.id }) {
+                    if !devices[idx].isAvailable { devices[idx] = classicDevice }
+                } else {
+                    devices.append(classicDevice)
+                }
+            }
             let minOS: String? = needMinOS
                 ? ((try? IPAResigner.loadInfoPlist(ipaPath: path))?["MinimumOSVersion"]) as? String
                 : nil
@@ -174,8 +193,15 @@ final class DeviceInstallVM: ObservableObject {
 
         Task.detached { [self] in
             do {
-                try DeviceInstaller.install(ipaPath: path, device: device) { message in
-                    Task { @MainActor [self] in self.state = .installing(message: message) }
+                switch device.backend {
+                case .coreDevice:
+                    try DeviceInstaller.install(ipaPath: path, device: device) { message in
+                        Task { @MainActor [self] in self.state = .installing(message: message) }
+                    }
+                case .classic:
+                    try ClassicDeviceInstaller.install(ipaPath: path, device: device) { message in
+                        Task { @MainActor [self] in self.state = .installing(message: message) }
+                    }
                 }
                 await MainActor.run { self.state = .success(deviceName: device.name) }
             } catch {

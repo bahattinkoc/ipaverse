@@ -46,6 +46,15 @@ enum DeviceTransport: Sendable {
     }
 }
 
+/// Which backend found/can install to this device. `coreDevice` (devicectl)
+/// only works for iOS 17+; `classic` (libimobiledevice, ClassicDeviceInstaller)
+/// is the fallback for iOS 16 and earlier, where devicectl can list a device
+/// but its RemoteXPC tunnel never comes up.
+enum DeviceInstallBackend: Sendable {
+    case coreDevice
+    case classic
+}
+
 struct ConnectedDevice: Identifiable, Hashable, Sendable {
     let id: String       // UDID
     let name: String
@@ -54,6 +63,7 @@ struct ConnectedDevice: Identifiable, Hashable, Sendable {
     let platform: String
     let isAvailable: Bool
     let transport: DeviceTransport
+    var backend: DeviceInstallBackend = .coreDevice
 
     var isIPhone: Bool { platform == "iOS" || platform == "iPadOS" }
     var displayModel: String { model.isEmpty ? platform : model }
@@ -61,6 +71,9 @@ struct ConnectedDevice: Identifiable, Hashable, Sendable {
     var stateIcon: String {
         isAvailable ? "iphone" : "iphone.slash"
     }
+
+    static func == (lhs: ConnectedDevice, rhs: ConnectedDevice) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 enum DeviceInstallerError: LocalizedError {
