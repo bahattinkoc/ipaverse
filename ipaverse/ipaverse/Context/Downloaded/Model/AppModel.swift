@@ -68,6 +68,10 @@ final class DownloadedApp {
     var platform: String?
     var downloadDate: Date
     var filePath: String
+    /// Set when `filePath` is a derivative copy rather than the plain
+    /// downloaded/imported original — "Decrypted" (FridaDumper output) or
+    /// "Resigned" (IPAResigner output). Nil for a plain download/import.
+    var sourceTag: String?
 
     init(app: AppStoreApp, downloadDate: Date = Date(), filePath: String, versionOverride: String? = nil) {
         let resolvedVersion = versionOverride ?? app.version ?? ""

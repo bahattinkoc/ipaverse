@@ -85,6 +85,14 @@ final class AppStoreService: AppStoreServiceProtocol {
                 throw LoginError.invalidCredentials
             }
             throw LoginError.unknownError("GSA \(code): \(message)")
+        } catch GSAError.invalidResponse {
+            // gsa.apple.com returned something unparseable even after
+            // GSAClient's own retry — a raw "unparseable GsService2 body"
+            // message means nothing to the user; this is the exact same
+            // "Apple's edge is having a bad moment" situation the MZFinance
+            // host-rotation exhaustion below already reports, so reuse that
+            // message for a consistent, actionable result either way.
+            throw LoginError.serviceTemporarilyUnavailable
         }
     }
 
@@ -974,9 +982,15 @@ final class AppStoreService: AppStoreServiceProtocol {
                 } else {
                     // No redirect target: this edge node is a dead end for MZFinance.
                     // Cycle to the next fallback host rather than re-hitting the same one.
+                    // The pause between attempts was 400ms; a tight 12-request burst
+                    // against Apple's edge fleet in under 5 seconds looks like exactly
+                    // the kind of traffic its fraud/rate-limit heuristics key off of,
+                    // and a later, unrelated gsa.apple.com call has been seen getting
+                    // a transient 503 immediately after such a burst — spacing attempts
+                    // out further reduces how "bursty" this looks from Apple's side.
                     redirect = ""
                     hostIndex += 1
-                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    try? await Task.sleep(nanoseconds: 900_000_000)
                 }
                 attempt += 1
                 continue

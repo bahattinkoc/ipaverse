@@ -79,7 +79,14 @@ final class DumpVM: ObservableObject {
         outputPath: String,
         onProgress: @escaping @MainActor (String) -> Void
     ) async throws {
-        try await Task.detached(priority: .userInitiated) {
+        // .utility, not .userInitiated: FridaDumper blocks this thread on a
+        // semaphore signaled from Frida's own (lower-QoS) callback thread —
+        // waiting at .userInitiated for that to complete is a textbook
+        // priority inversion (Thread Performance Checker flags it). .utility
+        // is also the semantically correct class here per Apple's own
+        // guidance: a long-running task with a user-visible progress
+        // indicator, which is exactly what the Dump screen shows.
+        try await Task.detached(priority: .utility) {
             try FridaDumper.dumpDecrypted(ipaPath: ipaPath, appName: appName, outputPath: outputPath) { step in
                 Task { @MainActor in onProgress(step) }
             }

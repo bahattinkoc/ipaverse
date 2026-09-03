@@ -15,6 +15,7 @@ protocol AppRowData {
     var rowIconURL: String? { get }
     var rowPlatform: String? { get }
     var rowIsImported: Bool { get }
+    var rowSourceTag: String? { get }
 }
 
 extension AppStoreApp: AppRowData {
@@ -25,6 +26,7 @@ extension AppStoreApp: AppRowData {
     var rowIconURL: String? { self.iconURL }
     var rowPlatform: String? { self.platform?.rawValue }
     var rowIsImported: Bool { false }
+    var rowSourceTag: String? { nil }
 }
 
 extension DownloadedApp: AppRowData {
@@ -37,6 +39,7 @@ extension DownloadedApp: AppRowData {
     // Imported IPAs are not tied to an App Store record (appId == 0), so they
     // cannot be re-downloaded.
     var rowIsImported: Bool { self.appId == 0 }
+    var rowSourceTag: String? { self.sourceTag }
 }
 
 enum AppRowType {
@@ -147,6 +150,23 @@ struct AppRowView: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(platform.badgeColor.opacity(0.3), lineWidth: 0.5)
                     )
+                }
+
+                if let sourceTag = app.rowSourceTag {
+                    let color: Color = sourceTag == "Resigned" ? .purple : .blue
+                    Text(sourceTag)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(color.opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(color.opacity(0.3), lineWidth: 0.5)
+                        )
                 }
             }
 

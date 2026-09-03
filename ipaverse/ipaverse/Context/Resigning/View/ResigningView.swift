@@ -7,9 +7,11 @@
 
 import SwiftUI
 import AppKit
+import SwiftData
 
 struct ResigningView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel: ResigningVM
 
     /// Called when the user clicks "Install to Device" after a successful sign.
@@ -31,8 +33,16 @@ struct ResigningView: View {
             Divider()
             footer
         }
-        .frame(width: 580, height: 620)
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 700, idealHeight: 780)
         .onAppear { Task { await viewModel.load() } }
+        .onChange(of: viewModel.state) { _, newValue in
+            guard case .signed(let outputPath) = newValue else { return }
+            // Surface the resigned output in Downloaded, tagged, instead of
+            // leaving it as an invisible file the user has to know to look for.
+            let imported = try? IPAImporter.importIPA(at: URL(fileURLWithPath: outputPath), into: modelContext)
+            imported?.sourceTag = "Resigned"
+            try? modelContext.save()
+        }
         .alert("FairPlay Encrypted", isPresented: Binding(
             get: { viewModel.isFairPlayWarning },
             set: { if !$0 { viewModel.cancelFairPlayWarning() } }
@@ -385,7 +395,11 @@ struct ResigningView: View {
                 .buttonStyle(.bordered)
 
             Button {
-                dismiss()
+                // Deliberately not dismissing here: ResigningView now lives
+                // in its own independent window (not a sheet), and this
+                // window hosts the install sheet triggered by `onInstall` —
+                // closing it first would tear the sheet down before it can
+                // ever appear.
                 onInstall?(outputPath)
             } label: {
                 Label("Install to Device", systemImage: "iphone.and.arrow.forward")

@@ -33,6 +33,10 @@ struct EmptyStateView: View {
     var tone: EmptyStateTone = .neutral
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
+    /// When set, renders a dashed drop-zone box below the message advertising
+    /// that this screen also accepts a file drag-and-drop — otherwise that
+    /// affordance is invisible until a drag is already in progress.
+    var dropHint: String? = nil
 
     var body: some View {
         VStack(spacing: 16) {
@@ -56,7 +60,37 @@ struct EmptyStateView: View {
                 Button(actionTitle, action: action)
                     .buttonStyle(.borderedProminent)
             }
+
+            if let dropHint {
+                DropHintBox(text: dropHint)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Dashed-border "this accepts a file drag-and-drop" hint — a static
+/// affordance, since the only other indication (a highlighted border) only
+/// appears once a drag is already in progress, by which point the user has
+/// already had to guess drop support exists.
+struct DropHintBox: View {
+    let text: String
+    var compact: Bool = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.doc")
+            Text(text)
+        }
+        .font(compact ? .caption : .callout)
+        .foregroundColor(.secondary)
+        .padding(.horizontal, compact ? 12 : 20)
+        .padding(.vertical, compact ? 8 : 14)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+        )
     }
 }

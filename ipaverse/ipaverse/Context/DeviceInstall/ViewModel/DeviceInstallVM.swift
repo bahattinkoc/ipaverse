@@ -191,22 +191,35 @@ final class DeviceInstallVM: ObservableObject {
 
         let path = ipaPath
 
-        Task.detached { [self] in
+        Task.detached { [weak self] in
+            // Captured once, up front, as a genuine local `let` — the nested
+            // progress-callback closures below can then reference it directly
+            // without each needing their own `[weak self]`/re-unwrap, which is
+            // what was tripping Swift 6's "captured var 'self'" diagnostic.
+            guard let self else { return }
             do {
                 switch device.backend {
                 case .coreDevice:
                     try DeviceInstaller.install(ipaPath: path, device: device) { message in
-                        Task { @MainActor [self] in self.state = .installing(message: message) }
+                        Task { @MainActor in self.state = .installing(message: message) }
                     }
                 case .classic:
                     try ClassicDeviceInstaller.install(ipaPath: path, device: device) { message in
-                        Task { @MainActor [self] in self.state = .installing(message: message) }
+                        Task { @MainActor in self.state = .installing(message: message) }
                     }
                 }
-                await MainActor.run { self.state = .success(deviceName: device.name) }
+                await self.markInstalled(deviceName: device.name)
             } catch {
-                await MainActor.run { self.state = .error(error.localizedDescription) }
+                await self.markInstallError(error.localizedDescription)
             }
         }
+    }
+
+    private func markInstalled(deviceName: String) {
+        state = .success(deviceName: deviceName)
+    }
+
+    private func markInstallError(_ message: String) {
+        state = .error(message)
     }
 }

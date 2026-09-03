@@ -10,11 +10,12 @@ import SwiftUI
 struct MainView: View {
     let account: Account
     @EnvironmentObject var loginViewModel: LoginVM
-    @State private var selectedTab = 0
+    @EnvironmentObject private var navigationState: AppNavigationState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationStack {
-            TabView(selection: $selectedTab) {
+            TabView(selection: $navigationState.selectedTab) {
                 DownloadedView(account: account)
                     .tabItem {
                         Image(systemName: "arrow.down.circle")
@@ -32,6 +33,15 @@ struct MainView: View {
             .navigationTitle("ipaverse")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        openWindow(id: "resign")
+                    } label: {
+                        Image(systemName: "signature")
+                            .font(.title2)
+                    }
+                    .help("Resign IPA…")
+                }
+                ToolbarItem(placement: .primaryAction) {
                     // Opens the standard, independent Settings window (the
                     // SwiftUI `Settings` scene) — same one ⌘, triggers.
                     SettingsLink {
@@ -40,6 +50,24 @@ struct MainView: View {
                     }
                 }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                footer
+            }
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack {
+                Text(Bundle.main.appName)
+                Spacer()
+                Text("v\(Bundle.main.shortVersion)")
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary.opacity(0.6))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
     }
 }

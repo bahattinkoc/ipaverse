@@ -282,16 +282,22 @@ final class ResigningVM: ObservableObject {
         }
         Task.detached { [weak self] in
             let fingerprints = IPAResigner.developerCertificateFingerprints(from: url)
-            await MainActor.run {
-                guard let self, self.provisioningProfileURL == url else { return }
-                self.profileCertificateFingerprints = fingerprints
-                // Selected certificate no longer authorized by the new profile — switch
-                // to one that is, if any is available, so the picker doesn't stay stale.
-                if let selected = self.selectedCertificate,
-                   !fingerprints.isEmpty, !fingerprints.contains(selected.id.uppercased()) {
-                    self.selectedCertificate = self.matchingCertificates.first
-                }
-            }
+            await self?.applyCertificateFingerprints(fingerprints, forProfile: url)
+        }
+    }
+
+    /// Runs on the MainActor via the implicit hop calling this isolated method
+    /// from a detached Task — avoids the `MainActor.run { guard let self ... }`
+    /// nested-closure pattern, which Swift 6's strict concurrency checking
+    /// flags ("reference to captured var 'self' in concurrently-executing code").
+    private func applyCertificateFingerprints(_ fingerprints: Set<String>, forProfile url: URL) {
+        guard provisioningProfileURL == url else { return }
+        profileCertificateFingerprints = fingerprints
+        // Selected certificate no longer authorized by the new profile — switch
+        // to one that is, if any is available, so the picker doesn't stay stale.
+        if let selected = selectedCertificate,
+           !fingerprints.isEmpty, !fingerprints.contains(selected.id.uppercased()) {
+            selectedCertificate = matchingCertificates.first
         }
     }
 
@@ -302,7 +308,7 @@ final class ResigningVM: ObservableObject {
     /// deliberately not exhaustive, just the ones known to cause silent
     /// runtime failures (crashes or dead features) rather than install-time
     /// rejection.
-    private static let watchedEntitlements: [(key: String, label: String)] = [
+    private nonisolated static let watchedEntitlements: [(key: String, label: String)] = [
         ("com.apple.security.application-groups", "App Groups"),
         ("aps-environment", "Push Notifications"),
         ("com.apple.developer.associated-domains", "Associated Domains"),
@@ -322,11 +328,13 @@ final class ResigningVM: ObservableObject {
         Task.detached { [weak self] in
             let profileEntitlements = (try? IPAResigner.extractEntitlements(from: profileURL)) ?? [:]
             let warnings = Self.diffEntitlements(original: original, profile: profileEntitlements, identityReplacements: identityReplacements)
-            await MainActor.run {
-                guard let self, self.provisioningProfileURL == profileURL else { return }
-                self.entitlementWarnings = warnings
-            }
+            await self?.applyEntitlementWarnings(warnings, forProfile: profileURL)
         }
+    }
+
+    private func applyEntitlementWarnings(_ warnings: [String], forProfile profileURL: URL) {
+        guard provisioningProfileURL == profileURL else { return }
+        entitlementWarnings = warnings
     }
 
     /// `identityReplacements` (old → new, from an applied "Move to New Identity")
@@ -381,22 +389,23 @@ final class ResigningVM: ObservableObject {
         Task.detached { [weak self] in
             let refs = (try? BundleIdentityMigrator.scanForIdentityReferences(ipaPath: ipaPath, needles: needles)) ?? []
             let derived = profileURL.flatMap { Self.deriveIdentity(fromProfileAt: $0) }
-            await MainActor.run {
-                guard let self else { return }
-                self.identityReferences = refs
-                // A selected profile already declares its own bundle ID and
-                // App Group — if the user already picked one, they've already
-                // made this decision on the portal, no need to ask again (and
-                // no risk of a typo/mismatch between what's typed here and
-                // what the profile actually authorizes).
-                if let derived {
-                    self.newBundleIdentifier = derived.bundleID
-                    if let appGroup = derived.appGroup { self.newAppGroupName = appGroup }
-                }
-                self.isScanningIdentity = false
-                self.showIdentityMigrationSheet = true
-            }
+            await self?.applyIdentityScanResults(refs, derived: derived)
         }
+    }
+
+    private func applyIdentityScanResults(_ refs: [IdentityReference], derived: (bundleID: String, appGroup: String?)?) {
+        identityReferences = refs
+        // A selected profile already declares its own bundle ID and App
+        // Group — if the user already picked one, they've already made this
+        // decision on the portal, no need to ask again (and no risk of a
+        // typo/mismatch between what's typed here and what the profile
+        // actually authorizes).
+        if let derived {
+            newBundleIdentifier = derived.bundleID
+            if let appGroup = derived.appGroup { newAppGroupName = appGroup }
+        }
+        isScanningIdentity = false
+        showIdentityMigrationSheet = true
     }
 
     /// Reads the new bundle ID and (if any) App Group directly out of a
@@ -446,11 +455,12 @@ final class ResigningVM: ObservableObject {
             let files = (try? BundleIdentityMigrator.applyReplacements(
                 ipaPath: ipaPath, references: references, replacements: replacements
             )) ?? [:]
-            await MainActor.run {
-                guard let self else { return }
-                for (path, data) in files { self.fileReplacements[path] = data }
-            }
+            await self?.mergeFileReplacements(files)
         }
+    }
+
+    private func mergeFileReplacements(_ files: [String: Data]) {
+        for (path, data) in files { fileReplacements[path] = data }
     }
 
     // MARK: - Framework removal
@@ -540,7 +550,7 @@ final class ResigningVM: ObservableObject {
         )
         let ipaPath = downloadedApp.filePath
 
-        Task.detached { [self] in
+        Task.detached { [weak self] in
             do {
                 try IPAResigner().sign(
                     ipaPath: ipaPath,
@@ -548,19 +558,29 @@ final class ResigningVM: ObservableObject {
                     outputPath: outputPath,
                     allowFairPlayEncrypted: allowFairPlayEncrypted
                 ) { message in
-                    Task { @MainActor [self] in self.state = .signing(message: message) }
+                    Task { @MainActor [weak self] in self?.state = .signing(message: message) }
                 }
-                await MainActor.run { self.state = .signed(outputPath: outputPath) }
+                await self?.markSigned(outputPath: outputPath)
             } catch IPAResignError.fairPlayEncrypted {
-                await MainActor.run {
-                    self.pendingCertificate = certificate
-                    self.pendingOutputPath = outputPath
-                    self.state = .fairPlayWarning
-                }
+                await self?.markFairPlayWarning(certificate: certificate, outputPath: outputPath)
             } catch {
-                await MainActor.run { self.state = .error(error.localizedDescription) }
+                await self?.markError(error.localizedDescription)
             }
         }
+    }
+
+    private func markSigned(outputPath: String) {
+        state = .signed(outputPath: outputPath)
+    }
+
+    private func markFairPlayWarning(certificate: ResignerCertificate, outputPath: String) {
+        pendingCertificate = certificate
+        pendingOutputPath = outputPath
+        state = .fairPlayWarning
+    }
+
+    private func markError(_ message: String) {
+        state = .error(message)
     }
 }
 

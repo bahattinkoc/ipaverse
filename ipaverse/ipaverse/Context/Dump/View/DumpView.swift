@@ -121,7 +121,9 @@ struct DumpView: View {
             }
             Button(viewModel.outputFilePath == nil ? "Cancel" : "Done") {
                 if let path = viewModel.outputFilePath {
-                    try? IPAImporter.importIPA(at: URL(fileURLWithPath: path), into: modelContext)
+                    let imported = try? IPAImporter.importIPA(at: URL(fileURLWithPath: path), into: modelContext)
+                    imported?.sourceTag = "Decrypted"
+                    try? modelContext.save()
                     onImported?()
                 }
                 dismiss()

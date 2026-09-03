@@ -10,21 +10,15 @@ import SwiftData
 import AppKit
 import UniformTypeIdentifiers
 
-private struct IPAInstallContext: Identifiable {
-    let id = UUID()
-    let ipaPath: String
-    let appName: String
-}
-
 struct DownloadedView: View {
     let account: Account
     @EnvironmentObject private var loginViewModel: LoginVM
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedApp: AppStoreApp?
-    @State private var appToSign: DownloadedApp?
     @State private var installContext: IPAInstallContext?
     @State private var appToScan: DownloadedApp?
     @State private var appToDump: DownloadedApp?
@@ -52,10 +46,17 @@ struct DownloadedView: View {
                         icon: "arrow.down.circle",
                         title: "No Downloaded Apps",
                         message: "Apps you download will appear here",
-                        tone: .accent
+                        tone: .accent,
+                        dropHint: "or drag & drop an .ipa file here"
                     )
                 } else {
-                    List(downloadedApps) { downloadedApp in
+                    List {
+                        DropHintBox(text: "Drag & drop an .ipa file here to add it", compact: true)
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 8, trailing: 8))
+
+                        ForEach(downloadedApps) { downloadedApp in
                         DownloadedAppRow(
                             downloadedApp: downloadedApp,
                             downloadState: .idle,
@@ -73,9 +74,9 @@ struct DownloadedView: View {
                             }
 
                             Button {
-                                appToSign = downloadedApp
+                                openWindow(id: "resign", value: downloadedApp.id)
                             } label: {
-                                Label("Edit & Sign", systemImage: "signature")
+                                Label("Edit & Resign", systemImage: "signature")
                             }
 
                             Button {
@@ -107,6 +108,7 @@ struct DownloadedView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        }
                     }
                     .refreshable {
                         loadDownloadedApps()
@@ -114,16 +116,6 @@ struct DownloadedView: View {
                 }
             }
             .navigationTitle("Downloaded")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        presentImportPanel()
-                    } label: {
-                        Label("Import IPA", systemImage: "square.and.arrow.down")
-                    }
-                    .help("Import an .ipa file from disk")
-                }
-            }
             .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
                 handleDrop(providers)
             }
@@ -141,11 +133,6 @@ struct DownloadedView: View {
         }
         .sheet(item: $selectedApp) { app in
             AppDetailView(app: app, account: loginViewModel.currentAccount ?? account)
-        }
-        .sheet(item: $appToSign) { app in
-            ResigningView(downloadedApp: app) { signedPath in
-                installContext = IPAInstallContext(ipaPath: signedPath, appName: app.name)
-            }
         }
         .sheet(item: $installContext) { ctx in
             DeviceInstallView(
@@ -179,17 +166,6 @@ struct DownloadedView: View {
     }
 
     // MARK: - Import
-
-    private func presentImportPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [UTType(filenameExtension: "ipa") ?? .data]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        importIPAs(from: panel.urls)
-    }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         let ipaProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }

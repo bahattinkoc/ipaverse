@@ -64,9 +64,11 @@ struct IPAImporter {
 
     /// Imports the IPA at `ipaURL` into SwiftData. If a record with the same identity
     /// (`appId_bundleID_version`) already exists, its file path and date are updated
-    /// instead of inserting a duplicate.
+    /// instead of inserting a duplicate. Returns the inserted/updated record so
+    /// callers can tag it (e.g. `sourceTag`) without a second fetch.
+    @discardableResult
     @MainActor
-    static func importIPA(at ipaURL: URL, into context: ModelContext) throws {
+    static func importIPA(at ipaURL: URL, into context: ModelContext) throws -> DownloadedApp {
         let app = try metadata(for: ipaURL)
         // Prefer the app's build date (from the IPA) over "now" for imported apps.
         let date = IPAResigner.appBuildDate(ipaPath: ipaURL.path) ?? Date()
@@ -82,14 +84,18 @@ struct IPAImporter {
             predicate: #Predicate<DownloadedApp> { $0.id == identity }
         )
 
+        let result: DownloadedApp
         if let existing = try context.fetch(descriptor).first {
             existing.filePath = ipaURL.path
             existing.downloadDate = date
             if let iconURLString { existing.iconURL = iconURLString }
+            result = existing
         } else {
             context.insert(imported)
+            result = imported
         }
         try context.save()
+        return result
     }
 
     // MARK: - Icon cache

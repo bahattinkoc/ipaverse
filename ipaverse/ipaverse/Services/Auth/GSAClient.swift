@@ -126,6 +126,13 @@ final class GSAClient {
     // MARK: - Request plumbing
 
     /// Sends one GsService2 operation and returns the inner `Response` dict.
+    /// gsa.apple.com occasionally answers with a transient 5xx HTML error page
+    /// instead of a plist — most often observed right after a burst of
+    /// requests elsewhere (e.g. AppStoreService's MZFinance host-rotation
+    /// retries). One retry after a short pause clears the vast majority of
+    /// these without ever surfacing a raw parse error to the user; a
+    /// non-5xx unparseable body (e.g. a genuinely malformed response) is not
+    /// retried since a retry can't fix that.
     private func send(request inner: [String: Any]) async throws -> [String: Any] {
         var requestBody = inner
         requestBody["cpd"] = clientProvidedData()
@@ -145,26 +152,38 @@ final class GSAClient {
         req.setValue("akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0", forHTTPHeaderField: "User-Agent")
         req.setValue(anisette.headers()["X-Mme-Client-Info"], forHTTPHeaderField: "X-MMe-Client-Info")
 
-        NetworkLogger.shared.logRequest(req)
-        let (data, response) = try await session.data(for: req)
-        NetworkLogger.shared.logResponse(response, data: data, error: nil)
+        let maxAttempts = 2
+        for attempt in 1...maxAttempts {
+            NetworkLogger.shared.logRequest(req)
+            let (data, response) = try await session.data(for: req)
+            NetworkLogger.shared.logResponse(response, data: data, error: nil)
 
-        guard let parsed = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
-              let responseDict = parsed["Response"] as? [String: Any] else {
-            throw GSAError.invalidResponse("unparseable GsService2 body")
-        }
-
-        if let status = responseDict["Status"] as? [String: Any],
-           let ec = (status["ec"] as? NSNumber)?.intValue, ec != 0 {
-            // ec != 0 but secondary-auth markers are handled by the caller; only
-            // throw here for hard failures (bad credentials, etc.).
-            if status["au"] == nil {
-                let em = (status["em"] as? String) ?? "Unknown error"
-                throw GSAError.serverError(code: ec, message: em)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let parsed = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
+                  let responseDict = parsed["Response"] as? [String: Any] else {
+                let isTransient = (500...599).contains(statusCode)
+                if isTransient, attempt < maxAttempts {
+                    print("🔐 [GSA] transient response (HTTP \(statusCode)) on attempt \(attempt) — retrying")
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    continue
+                }
+                throw GSAError.invalidResponse("unparseable GsService2 body (HTTP \(statusCode))")
             }
+
+            if let status = responseDict["Status"] as? [String: Any],
+               let ec = (status["ec"] as? NSNumber)?.intValue, ec != 0 {
+                // ec != 0 but secondary-auth markers are handled by the caller; only
+                // throw here for hard failures (bad credentials, etc.).
+                if status["au"] == nil {
+                    let em = (status["em"] as? String) ?? "Unknown error"
+                    throw GSAError.serverError(code: ec, message: em)
+                }
+            }
+
+            return responseDict
         }
 
-        return responseDict
+        throw GSAError.invalidResponse("unparseable GsService2 body")
     }
 
     // MARK: - Two-factor verification
