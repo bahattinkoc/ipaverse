@@ -59,34 +59,30 @@ Or build from source:
 ```bash
 git clone https://github.com/bahattinkoc/ipaverse.git
 cd ipaverse
-open ipaverse.xcodeproj
+open ipaverse/ipaverse.xcodeproj
 ```
+
+Apple Silicon only (arm64), macOS 14.6 (Sonoma) or later.
 
 <br>
 
-## What works / What doesn't
+## Features
 
-| Supported | Not supported |
-|---|---|
-| DRM-free apps | Pirated / cracked IPAs |
-| FairPlay-encrypted apps, given a jailbroken source device¹ | App Store policy circumvention |
-| App Store search | |
-| Version history | |
-| Re-signing own or decrypted apps | |
+- Search and download iOS, iPadOS, macOS, tvOS, and visionOS apps from the App Store.
+- Manage multiple Apple ID accounts, switch storefronts/regions, and browse version history.
+- Re-sign IPAs with your own certificate and provisioning profile, including a standalone Resign window.
+- Install re-signed apps to a device over USB or Wi-Fi.
+- An authorized security-testing toolkit for pentesters (see below).
 
-¹ ipaverse never breaks FairPlay's cryptography itself. Given a jailbroken device where you're already legitimately running the app (e.g. under your own Apple ID), it can capture the memory iOS has already decrypted for execution and use that to produce a DRM-free copy for re-signing — see [Security Testing](#security-testing) below.
+Full usage guide, screen by screen → **[USAGE.md](USAGE.md)**
 
 <br>
 
 ## Security Testing
 
-ipaverse includes a small toolkit aimed at security researchers doing **authorized** iOS app testing (bug bounty programs, contracted pentests, or testing your own apps) — not general sideloading. All of it lives in the Re-sign and Downloaded screens. None of it is bundled into ipaverse.app itself (it would otherwise roughly double the download size) — Frida's components are downloaded once, on first use, and cached locally.
+ipaverse includes a small toolkit aimed at security researchers doing authorized iOS app testing: a **Security Testing Mode** toggle (disables ATS for MITM proxying), **Frida Gadget injection**, a static **Security Scan**, and a **Dump Decrypted Copy** tool for FairPlay apps on a jailbroken source device. Details on each → [USAGE.md § Security Testing](USAGE.md#security-testing).
 
-- **Security Testing Mode** — one toggle that disables ATS (`NSAllowsArbitraryLoads`) on the signed build so a MITM proxy (Burp, mitmproxy) can intercept its traffic. Every re-signed build is also always debuggable (`get-task-allow`). This does **not** bypass in-app certificate/public-key pinning — that's enforced in the app's own code, independent of ATS.
-- **Inject Frida Gadget** — patches the app's main binary to load a bundled [Frida](https://frida.re) Gadget at launch, so you can attach with `frida -H <device-ip>:27042 -n Gadget` (or [objection](https://github.com/sensepost/objection)) and instrument it — including bypassing pinning — on a **non-jailbroken** device. No `frida-server`/root needed, since the agent runs in-process.
-- **Dump Decrypted Copy** — for a real App Store IPA (which is FairPlay-encrypted even when the app is free), this reads the already-decrypted binary out of a *running* instance of the app on a **jailbroken** source device you control, and patches that into a DRM-free copy you can then re-sign and test on a separate, non-jailbroken target device. This is the same technique tools like `frida-ios-dump` use: it captures memory the OS already decrypted to execute the app, rather than breaking FairPlay's cryptography.
-
-None of this replaces getting proper authorization before testing an app you don't own.
+> ⚠️ **Educational and authorized use only.** These tools are meant for bug bounty programs, contracted pentests, or testing apps you own. Do not use them against apps, accounts, or systems you don't have explicit permission to test — misuse may violate Apple's terms of service and/or the law. ipaverse and its author take no responsibility for misuse.
 
 <br>
 
