@@ -8,7 +8,13 @@
 //  IPA by reading the already-decrypted __TEXT bytes out of a *running*
 //  instance of the app on a jailbroken device (same technique frida-ios-dump
 //  uses), then patching those bytes into the on-disk binary and clearing its
-//  FairPlay LC_ENCRYPTION_INFO flag. This does not break Apple's FairPlay
+//  FairPlay LC_ENCRYPTION_INFO flag. Does this for the main executable *and*
+//  any bundled framework/dylib that carries its own LC_ENCRYPTION_INFO —
+//  some SDKs (e.g. analytics/push frameworks) ship separately encrypted from
+//  the main binary, and a resigned IPA that leaves one of those still
+//  encrypted crashes at launch (dyld can't mmap it: "could not register
+//  fairplay decryption, mremap_encrypted() => -1") before any app code runs.
+//  This does not break Apple's FairPlay
 //  cryptography — it captures memory the OS already decrypted in order to
 //  execute it. See Vendor/frida-core/README.md and the main README's
 //  Security & Privacy section for the authorized-use framing.
@@ -140,7 +146,8 @@ struct FridaDumper {
 
     // MARK: - Public entry point
 
-    /// Dumps a decrypted copy of `ipaPath`'s main binary using a running
+    /// Dumps a decrypted copy of `ipaPath`'s main binary — and any bundled
+    /// framework/dylib that's separately FairPlay-encrypted — using a running
     /// instance of `appName` on a USB-connected jailbroken device, and writes
     /// a new, FairPlay-free IPA to `outputPath`.
     static func dumpDecrypted(
@@ -164,15 +171,30 @@ struct FridaDumper {
         let executableName = appURL.deletingPathExtension().lastPathComponent
         let binaryURL = appURL.appendingPathComponent(executableName)
 
+        // Module name Frida sees for a loaded image is its own filename, which
+        // for both the main executable and a framework's binary is the same as
+        // the on-disk name we already have — no separate mapping needed.
+        let candidates = [(name: executableName, url: binaryURL)] + embeddedBinaries(in: appURL)
+        let encryptedTargets = candidates.filter { IPAResigner.isFairPlayEncrypted(binaryURL: $0.url) }
+        guard !encryptedTargets.isEmpty else { throw FridaDumperError.noEncryptedSegmentFound }
+        progress("Encrypted: \(encryptedTargets.map(\.name).joined(separator: ", "))")
+
         let coreLibURL = try FridaRuntime.ensureCoreLibrary(progress: progress)
         let handle = try FridaRuntime.dlopenLibrary(at: coreLibURL)
         let api = try FridaCoreAPI(handle: handle)
 
         progress("Connecting to device...")
-        let dump = try dumpFromDevice(api: api, processName: appName, progress: progress)
+        let dumps = try dumpFromDevice(
+            api: api, processName: appName, moduleNames: encryptedTargets.map(\.name), progress: progress
+        )
 
-        progress("Patching binary...")
-        try patch(binaryURL: binaryURL, cryptoff: dump.cryptoff, cryptsize: dump.cryptsize, decryptedBytes: dump.bytes)
+        for target in encryptedTargets {
+            guard let dump = dumps[target.name] else {
+                throw FridaDumperError.dumpMessageInvalid("no dump result for \(target.name)")
+            }
+            progress("Patching \(target.name)...")
+            try patch(binaryURL: target.url, cryptoff: dump.cryptoff, cryptsize: dump.cryptsize, decryptedBytes: dump.bytes)
+        }
 
         progress("Creating decrypted IPA...")
         try runProcess(
@@ -180,6 +202,39 @@ struct FridaDumper {
             workingDirectory: workDir,
             arguments: ["-qrX0", outputPath, "Payload"]
         )
+    }
+
+    // MARK: - Bundle scanning
+
+    /// Every framework/dylib Mach-O binary loaded directly into the *main app
+    /// process* — i.e. what's actually reachable via Process.getModuleByName
+    /// while attached to the running app.
+    ///
+    /// Deliberately excludes PlugIns/*.appex: app extensions (share extensions,
+    /// notification service extensions, widgets, ...) run as their own
+    /// separate OS process, launched independently by the system when their
+    /// extension point activates — they're never loaded into the containing
+    /// app's process, so no amount of "use the app for a bit" makes them
+    /// visible here. Dumping one requires attaching to *that* process while
+    /// it's actually running (e.g. a live push notification for a
+    /// NotificationServiceExtension), which is a separate, unimplemented flow.
+    private static func embeddedBinaries(in appURL: URL) -> [(name: String, url: URL)] {
+        let fm = FileManager.default
+        var results: [(name: String, url: URL)] = []
+
+        let frameworksDir = appURL.appendingPathComponent("Frameworks")
+        guard let items = try? fm.contentsOfDirectory(at: frameworksDir, includingPropertiesForKeys: nil) else {
+            return results
+        }
+        for item in items {
+            if item.pathExtension == "framework" {
+                let name = item.deletingPathExtension().lastPathComponent
+                results.append((name, item.appendingPathComponent(name)))
+            } else if item.pathExtension == "dylib" {
+                results.append((item.lastPathComponent, item))
+            }
+        }
+        return results
     }
 
     // MARK: - Frida session
@@ -190,20 +245,39 @@ struct FridaDumper {
         let bytes: Data
     }
 
-    /// Bridges the async GObject "message" signal into a synchronous result:
-    /// the C callback stashes the payload here and signals `semaphore`.
+    /// Bridges the async GObject "message" signal into a synchronous result.
+    /// The script can fire several "message" signals back-to-back (one per
+    /// dumped module) before the Swift side gets around to consuming them, so
+    /// each arrival is queued rather than stashed in a single shared slot —
+    /// a single slot risks a later message overwriting an earlier one that
+    /// hasn't been claimed by its matching semaphore.wait() yet.
     fileprivate final class DumpContext {
         let semaphore = DispatchSemaphore(value: 0)
         let gBytesGetData: FridaCoreAPI.GBytesGetData
-        var messageJSON: String?
-        var messageData: Data?
+        private let lock = NSLock()
+        private var queue: [(json: String, data: Data?)] = []
 
         init(gBytesGetData: @escaping FridaCoreAPI.GBytesGetData) {
             self.gBytesGetData = gBytesGetData
         }
+
+        func push(json: String, data: Data?) {
+            lock.lock()
+            queue.append((json, data))
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        func pop() -> (json: String, data: Data?)? {
+            lock.lock()
+            defer { lock.unlock() }
+            return queue.isEmpty ? nil : queue.removeFirst()
+        }
     }
 
-    private static func dumpFromDevice(api: FridaCoreAPI, processName: String, progress: @escaping (String) -> Void) throws -> DumpResult {
+    private static func dumpFromDevice(
+        api: FridaCoreAPI, processName: String, moduleNames: [String], progress: @escaping (String) -> Void
+    ) throws -> [String: DumpResult] {
         api.fridaInit()
 
         let manager = api.deviceManagerNew()
@@ -272,7 +346,8 @@ struct FridaDumper {
         }
 
         progress("Injecting dump agent...")
-        let script = api.sessionCreateScriptSync(session, Self.dumpAgentSource, nil, nil, &error)
+        let moduleNamesJSON = String(data: (try? JSONSerialization.data(withJSONObject: moduleNames)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
+        let script = api.sessionCreateScriptSync(session, Self.dumpAgentSource(moduleNamesJSON: moduleNamesJSON), nil, nil, &error)
         if let error {
             defer { api.gErrorFree(error) }
             throw FridaDumperError.scriptFailed(String(cString: error.pointee.message))
@@ -303,45 +378,66 @@ struct FridaDumper {
             throw FridaDumperError.scriptFailed(String(cString: error.pointee.message))
         }
 
-        progress("Reading decrypted memory...")
-        guard context.semaphore.wait(timeout: .now() + 30) == .success else {
-            throw FridaDumperError.dumpTimedOut
+        var results: [String: DumpResult] = [:]
+        for moduleName in moduleNames {
+            progress("Reading decrypted memory (\(moduleName))...")
+            guard context.semaphore.wait(timeout: .now() + 30) == .success else {
+                throw FridaDumperError.dumpTimedOut
+            }
+            guard let (json, data) = context.pop() else {
+                throw FridaDumperError.dumpMessageInvalid("<empty>")
+            }
+
+            guard let jsonData = json.data(using: .utf8),
+                  let payload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let body = payload["payload"] as? [String: Any],
+                  let module = body["module"] as? String
+            else {
+                throw FridaDumperError.dumpMessageInvalid(json)
+            }
+
+            if let errorMessage = body["error"] as? String {
+                throw FridaDumperError.dumpMessageInvalid("\(module): \(errorMessage)")
+            }
+            guard let cryptoff = body["cryptoff"] as? Int,
+                  let cryptsize = body["cryptsize"] as? Int,
+                  let bytes = data
+            else {
+                throw FridaDumperError.dumpMessageInvalid(json)
+            }
+
+            results[module] = DumpResult(cryptoff: cryptoff, cryptsize: cryptsize, bytes: bytes)
         }
 
-        guard let json = context.messageJSON,
-              let jsonData = json.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-        else {
-            throw FridaDumperError.dumpMessageInvalid(context.messageJSON ?? "<empty>")
+        let missing = Set(moduleNames).subtracting(results.keys)
+        guard missing.isEmpty else {
+            throw FridaDumperError.dumpMessageInvalid("no dump result received for: \(missing.joined(separator: ", "))")
         }
 
-        if let errorMessage = (payload["payload"] as? [String: Any])?["error"] as? String {
-            throw FridaDumperError.dumpMessageInvalid(errorMessage)
-        }
-        guard let body = payload["payload"] as? [String: Any],
-              let cryptoff = body["cryptoff"] as? Int,
-              let cryptsize = body["cryptsize"] as? Int,
-              let bytes = context.messageData
-        else {
-            throw FridaDumperError.dumpMessageInvalid(json)
-        }
-
-        return DumpResult(cryptoff: cryptoff, cryptsize: cryptsize, bytes: bytes)
+        return results
     }
 
-    /// Frida JS agent: locates the main image's LC_ENCRYPTION_INFO(_64) and
-    /// reads the encrypted range directly out of live memory, where FairPlay
-    /// has already decrypted it for execution. Sends the bytes back as the
-    /// message's binary payload.
-    private static let dumpAgentSource = """
+    /// Frida JS agent: for each named module, locates its LC_ENCRYPTION_INFO(_64)
+    /// and reads the encrypted range directly out of live memory, where FairPlay
+    /// has already decrypted it for execution. Sends one message per module
+    /// back, in the same order, with the bytes as that message's binary payload.
+    private static func dumpAgentSource(moduleNamesJSON: String) -> String {
+    """
     'use strict';
-    function main() {
-      const mod = Process.mainModule;
+    const __targets = \(moduleNamesJSON);
+    function dumpModule(name) {
+      let mod;
+      try {
+        mod = Process.getModuleByName(name);
+      } catch (e) {
+        send({ module: name, error: 'module not loaded: ' + e.message });
+        return;
+      }
       const base = mod.base;
       const magic = base.readU32();
       const is64 = magic === 0xfeedfacf;
       if (!is64 && magic !== 0xfeedface) {
-        send({ error: 'unsupported Mach-O magic' });
+        send({ module: name, error: 'unsupported Mach-O magic' });
         return;
       }
       const ncmds = base.add(16).readU32();
@@ -361,18 +457,19 @@ struct FridaDumper {
         offset += cmdsize;
       }
       if (found === null) {
-        send({ error: 'no LC_ENCRYPTION_INFO found' });
+        send({ module: name, error: 'no LC_ENCRYPTION_INFO found' });
         return;
       }
       if (found.cryptid === 0) {
-        send({ error: 'already decrypted (cryptid=0)' });
+        send({ module: name, error: 'already decrypted (cryptid=0)' });
         return;
       }
       const bytes = base.add(found.cryptoff).readByteArray(found.cryptsize);
-      send({ cryptoff: found.cryptoff, cryptsize: found.cryptsize }, bytes);
+      send({ module: name, cryptoff: found.cryptoff, cryptsize: found.cryptsize }, bytes);
     }
-    main();
+    __targets.forEach(dumpModule);
     """
+    }
 
     // MARK: - Binary patching
 
@@ -450,17 +547,15 @@ private func fridaDumpMessageCallback(
     _ data: OpaquePointer?,
     _ userData: UnsafeMutableRawPointer?
 ) {
-    guard let userData else { return }
+    guard let userData, let message else { return }
     let context = Unmanaged<FridaDumper.DumpContext>.fromOpaque(userData).takeUnretainedValue()
 
-    if let message {
-        context.messageJSON = String(cString: message)
-    }
+    var payloadData: Data?
     if let data {
         var size: gsize = 0
         if let ptr = context.gBytesGetData(data, &size), size > 0 {
-            context.messageData = Data(bytes: ptr, count: Int(size))
+            payloadData = Data(bytes: ptr, count: Int(size))
         }
     }
-    context.semaphore.signal()
+    context.push(json: String(cString: message), data: payloadData)
 }

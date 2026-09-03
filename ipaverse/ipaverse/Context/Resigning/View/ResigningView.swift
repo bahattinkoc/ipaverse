@@ -50,6 +50,9 @@ struct ResigningView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+        .sheet(isPresented: $viewModel.showIdentityMigrationSheet) {
+            IdentityMigrationSheet(viewModel: viewModel)
+        }
     }
 
     // MARK: - Header
@@ -184,10 +187,13 @@ struct ResigningView: View {
                 List(viewModel.fileTree, children: \.children) { node in
                     FileNodeRow(
                         node: node,
-                        isReplaced: viewModel.fileReplacements[node.path] != nil
-                    ) {
-                        viewModel.replaceFile(at: node.path)
-                    }
+                        isReplaced: viewModel.fileReplacements[node.path] != nil,
+                        isMarkedForRemoval: viewModel.frameworksToRemove.contains(node.frameworkName ?? ""),
+                        onReplace: { viewModel.replaceFile(at: node.path) },
+                        onToggleRemove: node.frameworkName.map { name in
+                            { viewModel.toggleFrameworkRemoval(name) }
+                        }
+                    )
                 }
                 .listStyle(.plain)
             }
@@ -239,6 +245,30 @@ struct ResigningView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Select a provisioning profile (.mobileprovision)")
+
+                Button {
+                    viewModel.scanForIdentityMigration()
+                } label: {
+                    if viewModel.isScanningIdentity {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Move to New Identity", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                    }
+                }
+                .disabled(viewModel.isScanningIdentity || viewModel.provisioningProfileURL == nil)
+                .help("Move the bundle ID to a new identity you own — automatically finds and updates other config files that reference it. The new bundle ID / App Group are read from the selected provisioning profile.")
+            }
+
+            if !viewModel.entitlementWarnings.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(viewModel.entitlementWarnings, id: \.self) { warning in
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
+                .padding(.leading, 100)
             }
 
             // Certificate
@@ -450,7 +480,9 @@ private struct PlistEntryRow: View {
 private struct FileNodeRow: View {
     let node: IPAFileNode
     let isReplaced: Bool
+    let isMarkedForRemoval: Bool
     let onReplace: () -> Void
+    let onToggleRemove: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -461,7 +493,8 @@ private struct FileNodeRow: View {
 
             Text(node.name)
                 .font(.system(.body, design: .monospaced))
-                .foregroundColor(isReplaced ? .orange : .primary)
+                .foregroundColor(isMarkedForRemoval ? .red : (isReplaced ? .orange : .primary))
+                .strikethrough(isMarkedForRemoval)
                 .lineLimit(1)
 
             if isReplaced {
@@ -473,10 +506,24 @@ private struct FileNodeRow: View {
                     .background(Color.orange.opacity(0.15))
                     .cornerRadius(4)
             }
+            if isMarkedForRemoval {
+                Text("will be removed")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.15))
+                    .cornerRadius(4)
+            }
 
             Spacer()
 
-            if !node.isDirectory {
+            if let onToggleRemove {
+                Button(isMarkedForRemoval ? "Undo" : "Remove") { onToggleRemove() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundColor(isMarkedForRemoval ? .secondary : .red)
+            } else if !node.isDirectory {
                 Button("Replace") { onReplace() }
                     .buttonStyle(.borderless)
                     .font(.caption)
@@ -496,6 +543,77 @@ private struct FileNodeRow: View {
         case "appex":       return "app.badge"
         default:            return "doc"
         }
+    }
+}
+
+// MARK: - IdentityMigrationSheet
+
+private struct IdentityMigrationSheet: View {
+    @ObservedObject var viewModel: ResigningVM
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Move to New Identity")
+                .font(.headline)
+
+            Text("Move the original bundle ID (and its App Group, if any) to a new identity you own on your own account. Other config files that reference these strings are listed below — they'll be updated automatically.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                if !viewModel.newBundleIdentifier.isEmpty {
+                    Label("Read from the selected provisioning profile — edit if needed.", systemImage: "checkmark.seal")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Text("New Bundle ID").font(.subheadline)
+                TextField("com.your-account.app", text: $viewModel.newBundleIdentifier)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("New App Group").font(.subheadline)
+                TextField("group.com.your-account.app", text: $viewModel.newAppGroupName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if viewModel.identityReferences.isEmpty {
+                Text("No other config file references the bundle ID — only CFBundleIdentifier will be updated.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Files found (\(viewModel.identityReferences.count))")
+                    .font(.subheadline)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(viewModel.identityReferences) { ref in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ref.path)
+                                    .font(.system(.caption, design: .monospaced))
+                                Text(ref.matchedStrings.joined(separator: ", "))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+            }
+
+            Spacer()
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Apply") {
+                    viewModel.applyIdentityMigration()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.newBundleIdentifier.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420, height: 420)
     }
 }
 

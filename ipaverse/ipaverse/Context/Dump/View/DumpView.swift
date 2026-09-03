@@ -70,7 +70,7 @@ struct DumpView: View {
                 Text(viewModel.dumpStep ?? "Starting…")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                Text("Make sure \"\(viewModel.appName)\" is open and in use on the jailbroken device connected over USB — FairPlay only decrypts code as it actually runs, so a freshly-launched app may not dump completely.")
+                Text("Make sure \"\(viewModel.appName)\" is open and in use on the jailbroken device connected over USB — FairPlay only decrypts code as it actually runs, so a freshly-launched app may not dump completely. This also applies per-framework: if a bundled SDK loads lazily (e.g. only once push notifications are used), trigger that feature too before dumping, or the dump will fail for that framework.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

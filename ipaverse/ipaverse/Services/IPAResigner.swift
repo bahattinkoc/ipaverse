@@ -45,6 +45,12 @@ struct ResignConfig: @unchecked Sendable {
     /// Injects the Frida Gadget into the app so it can be instrumented from a
     /// host machine without a jailbreak. See DylibInjector.
     var enableFridaGadgetInjection: Bool = false
+    /// Bare framework/dylib names (no extension) to delete from the bundle and
+    /// unlink from every binary that references them — for SDKs that
+    /// hard-crash when a capability their signing identity can't grant (Push,
+    /// App Groups, ...) is missing instead of degrading gracefully. See
+    /// FrameworkStripper.
+    var removedFrameworks: [String] = []
 }
 
 struct IPAFileNode: Identifiable, Sendable {
@@ -53,6 +59,17 @@ struct IPAFileNode: Identifiable, Sendable {
     let path: String
     let isDirectory: Bool
     var children: [IPAFileNode]?
+
+    /// Bare name (no extension) if this node is a framework/dylib living
+    /// directly inside a Frameworks/ directory — nil otherwise. Used to offer
+    /// framework removal (FrameworkStripper) only for nodes it actually applies to.
+    var frameworkName: String? {
+        let parts = path.components(separatedBy: "/")
+        guard parts.count >= 2, parts[parts.count - 2] == "Frameworks" else { return nil }
+        if isDirectory, name.hasSuffix(".framework") { return String(name.dropLast(".framework".count)) }
+        if !isDirectory, name.hasSuffix(".dylib") { return String(name.dropLast(".dylib".count)) }
+        return nil
+    }
 }
 
 enum IPAResignError: LocalizedError {
@@ -302,7 +319,7 @@ struct IPAResigner {
         let appName = appURL.deletingPathExtension().lastPathComponent
         let mainBinaryURL = appURL.appendingPathComponent(appName)
         print("⚙️ [IPAResigner] Checking FairPlay: \(mainBinaryURL.lastPathComponent)")
-        if isFairPlayEncrypted(binaryURL: mainBinaryURL) {
+        if Self.isFairPlayEncrypted(binaryURL: mainBinaryURL) {
             print("⚙️ [IPAResigner] ❌ FairPlay encrypted (cryptid=1)")
             if !allowFairPlayEncrypted {
                 throw IPAResignError.fairPlayEncrypted
@@ -351,6 +368,14 @@ struct IPAResigner {
             }
         }
 
+        // 4.2 Strip frameworks the user flagged as unusable under this signing
+        // identity (e.g. a Push/App-Groups-dependent SDK that fatalErrors
+        // instead of degrading gracefully when that capability is missing).
+        if !config.removedFrameworks.isEmpty {
+            progress("Removing frameworks...")
+            try FrameworkStripper.remove(frameworkNames: config.removedFrameworks, from: appURL, progress: progress)
+        }
+
         // 4.5 Inject Frida Gadget (Security Testing Mode: dynamic instrumentation
         // without a jailbreak — attach with `frida -H <device-ip>:27042 -n Gadget`)
         if config.enableFridaGadgetInjection {
@@ -389,7 +414,7 @@ struct IPAResigner {
         let bundleID = finalPlist["CFBundleIdentifier"] as? String ?? ""
 
         // 8. Entitlements — derive from provisioning profile (no unauthorized entitlements added)
-        let profileEntitlements = (try? extractEntitlements(from: profileURL)) ?? [:]
+        let profileEntitlements = (try? Self.extractEntitlements(from: profileURL)) ?? [:]
 
         // Team ID: extract from profile (authoritative source), not from certificate name
         let teamID: String = {
@@ -568,7 +593,27 @@ struct IPAResigner {
         }
     }
 
-    private func isFairPlayEncrypted(binaryURL: URL) -> Bool {
+    /// The entitlements a binary is *currently* signed with — e.g. the
+    /// original App Store signature on a freshly downloaded/decrypted IPA,
+    /// before resigning replaces it. Used to detect capabilities (App Groups,
+    /// Push, Associated Domains, ...) the original developer's signing
+    /// identity had that a new provisioning profile might not grant.
+    static func extractSignedEntitlements(fromBinaryAt url: URL) -> [String: Any] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["-d", "--entitlements", "-", "--xml", url.path]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        guard (try? process.run()) != nil else { return [:] }
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]) ?? [:]
+    }
+
+    static func isFairPlayEncrypted(binaryURL: URL) -> Bool {
         guard let data = try? Data(contentsOf: binaryURL), data.count > 8 else {
             print("⚙️ [IPAResigner] FairPlay: binary unreadable or too small — \(binaryURL.lastPathComponent)")
             return false
@@ -612,7 +657,7 @@ struct IPAResigner {
         return false
     }
 
-    private func checkEncryptionInMacho(data: Data, offset: Int) -> Bool {
+    private static func checkEncryptionInMacho(data: Data, offset: Int) -> Bool {
         guard offset + 16 <= data.count else { return false }
         let magic = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) }
         let needsSwap = magic == 0xCFFAEDFE || magic == 0xCEFAEDFE
@@ -700,7 +745,7 @@ struct IPAResigner {
         return Set(certs.map { Insecure.SHA1.hash(data: $0).map { String(format: "%02X", $0) }.joined() })
     }
 
-    private func extractEntitlements(from profileURL: URL) throws -> [String: Any] {
+    static func extractEntitlements(from profileURL: URL) throws -> [String: Any] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["cms", "-D", "-i", profileURL.path]
@@ -751,7 +796,7 @@ struct IPAResigner {
 
     // MARK: - Static zip helpers (unzip -Z1 pattern)
 
-    private static func listEntries(ipaPath: String) throws -> [String] {
+    static func listEntries(ipaPath: String) throws -> [String] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-Z1", ipaPath]
@@ -769,7 +814,7 @@ struct IPAResigner {
             .filter { !$0.isEmpty }
     }
 
-    private static func readEntry(ipaPath: String, entryName: String) throws -> Data {
+    static func readEntry(ipaPath: String, entryName: String) throws -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = ["-p", ipaPath, entryName]
