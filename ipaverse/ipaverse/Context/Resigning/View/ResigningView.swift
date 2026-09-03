@@ -13,6 +13,10 @@ struct ResigningView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel: ResigningVM
+    /// Gates the offensive/identity-altering resign features (ATS bypass,
+    /// Frida injection, Move to New Identity, framework removal) behind the
+    /// same Evil Mode switch in the main window's toolbar.
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     /// Called when the user clicks "Install to Device" after a successful sign.
     /// Passes the signed IPA path; caller should dismiss this sheet then open DeviceInstallView.
@@ -199,6 +203,7 @@ struct ResigningView: View {
                         node: node,
                         isReplaced: viewModel.fileReplacements[node.path] != nil,
                         isMarkedForRemoval: viewModel.frameworksToRemove.contains(node.frameworkName ?? ""),
+                        isEvilMode: isEvilMode,
                         onReplace: { viewModel.replaceFile(at: node.path) },
                         onToggleRemove: node.frameworkName.map { name in
                             { viewModel.toggleFrameworkRemoval(name) }
@@ -266,8 +271,10 @@ struct ResigningView: View {
                             .font(.caption)
                     }
                 }
-                .disabled(viewModel.isScanningIdentity || viewModel.provisioningProfileURL == nil)
-                .help("Move the bundle ID to a new identity you own — automatically finds and updates other config files that reference it. The new bundle ID / App Group are read from the selected provisioning profile.")
+                .disabled(viewModel.isScanningIdentity || viewModel.provisioningProfileURL == nil || !isEvilMode)
+                .help(isEvilMode
+                    ? "Move the bundle ID to a new identity you own — automatically finds and updates other config files that reference it. The new bundle ID / App Group are read from the selected provisioning profile."
+                    : "Enable Evil Mode from the main window to use this.")
             }
 
             if !viewModel.entitlementWarnings.isEmpty {
@@ -337,7 +344,7 @@ struct ResigningView: View {
                 }
             }
 
-            // Security Testing Mode
+            // Security Testing Mode (gated behind Evil Mode)
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: $viewModel.enableSecurityTestingMode) {
                     Label("Security Testing Mode", systemImage: "ladybug")
@@ -345,6 +352,7 @@ struct ResigningView: View {
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .disabled(!isEvilMode)
 
                 Text("Disables ATS (NSAllowsArbitraryLoads) so a proxy like Burp or mitmproxy can intercept this app's traffic. Signed builds are always debuggable (get-task-allow). Does not bypass in-app certificate pinning.")
                     .font(.caption2)
@@ -358,11 +366,19 @@ struct ResigningView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .padding(.top, 6)
+                .disabled(!isEvilMode)
 
                 Text("Embeds a Frida agent in the app for runtime instrumentation (e.g. bypassing SSL pinning) — no jailbreak needed. After install, attach from your Mac with: frida -H <device-ip>:27042 -n Gadget -l script.js")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if !isEvilMode {
+                    Label("Enable Evil Mode from the main window to use these.", systemImage: "flame")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                        .padding(.top, 2)
+                }
             }
         }
         .padding(.horizontal)
@@ -495,6 +511,7 @@ private struct FileNodeRow: View {
     let node: IPAFileNode
     let isReplaced: Bool
     let isMarkedForRemoval: Bool
+    let isEvilMode: Bool
     let onReplace: () -> Void
     let onToggleRemove: (() -> Void)?
 
@@ -537,6 +554,8 @@ private struct FileNodeRow: View {
                     .buttonStyle(.borderless)
                     .font(.caption)
                     .foregroundColor(isMarkedForRemoval ? .secondary : .red)
+                    .disabled(!isMarkedForRemoval && !isEvilMode)
+                    .help(isEvilMode || isMarkedForRemoval ? "" : "Enable Evil Mode from the main window to remove frameworks.")
             } else if !node.isDirectory {
                 Button("Replace") { onReplace() }
                     .buttonStyle(.borderless)

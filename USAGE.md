@@ -34,7 +34,7 @@ Each result shows platform badges and minimum OS requirements before you downloa
 Everything you've downloaded, imported, resigned, or dumped lives in one list.
 
 - **Import** any `.ipa` you already have by dragging it onto the window.
-- Per-app actions: show in Finder, **Edit & Resign**, install to a device, run a [Security Scan](#security-testing), [dump a decrypted copy](#security-testing), or delete.
+- Per-app actions: show in Finder, **Edit & Resign**, install to a device, run a [Security Scan](#security-testing), [dump a decrypted copy](#security-testing) (requires **Evil Mode**), or delete.
 - Apps produced by ipaverse itself carry a **source tag** — `Resigned` (output of the re-signer) or `Decrypted` (output of the FairPlay dumper) — so you can tell a derivative copy apart from the original download at a glance.
 - Imported IPAs aren't tied to an App Store listing, so they can't be redownloaded if deleted — keep your own copy.
 
@@ -58,9 +58,9 @@ Re-sign any DRM-free IPA with your own certificate and provisioning profile — 
 - **Properties** tab — add, edit, or delete Info.plist keys, including boolean toggles.
 - **Files** tab — browse the IPA's file tree, replace individual files, or mark frameworks for removal.
 - Pick a `.mobileprovision` profile and a matching certificate; ipaverse warns if none of your local certificates are authorized by the profile.
-- **Move to New Identity** — reads the new bundle ID / App Group from the selected provisioning profile, finds every other config file referencing the old identifiers, and rewrites them for you.
+- **Move to New Identity** — reads the new bundle ID / App Group from the selected provisioning profile, finds every other config file referencing the old identifiers, and rewrites them for you. Requires **Evil Mode** (see [Security Testing](#security-testing)).
 - If the binary is still FairPlay-encrypted, ipaverse warns that the signed result will likely fail to launch — you can override, but see [Security Testing](#security-testing) for how to get a decrypted copy first.
-- Optional **Security Testing Mode** and **Inject Frida Gadget** toggles for authorized pentesting (see below).
+- Optional **Security Testing Mode** and **Inject Frida Gadget** toggles for authorized pentesting — both require **Evil Mode** to be switched on (see below).
 - The signed IPA is automatically added to your [Downloaded library](#downloaded-library), tagged `Resigned`.
 
 <br>
@@ -81,10 +81,14 @@ ipaverse includes a small toolkit aimed at security researchers doing **authoriz
 
 > ⚠️ **Educational and authorized use only.** These tools exist to help you test apps you own or are explicitly authorized to test. Do not use them against any app, account, or system you don't have permission to test — doing so may violate Apple's terms of service and/or the law. ipaverse and its author take no responsibility for misuse.
 
-- **Security Testing Mode** — one toggle that disables ATS (`NSAllowsArbitraryLoads`) on the signed build so a MITM proxy (Burp, mitmproxy) can intercept its traffic. Every re-signed build is also always debuggable (`get-task-allow`). This does **not** bypass in-app certificate/public-key pinning — that's enforced in the app's own code, independent of ATS.
-- **Inject Frida Gadget** — patches the app's main binary to load a bundled [Frida](https://frida.re) Gadget at launch, so you can attach with `frida -H <device-ip>:27042 -n Gadget` (or [objection](https://github.com/sensepost/objection)) and instrument it — including bypassing pinning — on a **non-jailbroken** device. No `frida-server`/root needed, since the agent runs in-process.
-- **Security Scan** — a static scan of an IPA that surfaces severity-graded findings (critical/high/medium/low/info) with title, category, file location, and code snippet — hardcoded secrets and keys, ATS misconfiguration, insecure storage patterns, and similar issues. Found values are redacted by default (toggle "Reveal values" to see them) and the full report can be exported as Markdown or JSON.
-- **Dump Decrypted Copy** — for a real App Store IPA (which is FairPlay-encrypted even when the app is free), this reads the already-decrypted binary out of a *running* instance of the app on a **jailbroken** source device you control, and patches that into a DRM-free copy you can then re-sign and test on a separate, non-jailbroken target device. This is the same technique tools like `frida-ios-dump` use: it captures memory the OS already decrypted to execute the app, rather than breaking FairPlay's cryptography. The target app needs to actually be open on the source device — if it lazily loads a framework you need dumped, trigger that code path first or the dump for that framework will fail.
+### Evil Mode
+
+The tools below that actually change or extract app behavior — **Security Testing Mode**, **Inject Frida Gadget**, **Dump Decrypted Copy**, and **Move to New Identity** in the Re-sign window — are disabled by default. Turn on **Evil Mode** to unlock them: click the flame icon in the main window's toolbar. While it's on, the flame shows filled/red and a small "· Evil Mode" label appears next to the app name in the main window's footer, so it's always obvious when these are active. Toggle it off again to re-lock everything. **Security Scan** doesn't change anything and is always available, on or off.
+
+- **Security Testing Mode** *(Evil Mode)* — one toggle that disables ATS (`NSAllowsArbitraryLoads`) on the signed build so a MITM proxy (Burp, mitmproxy) can intercept its traffic. Every re-signed build is also always debuggable (`get-task-allow`). This does **not** bypass in-app certificate/public-key pinning — that's enforced in the app's own code, independent of ATS.
+- **Inject Frida Gadget** *(Evil Mode)* — patches the app's main binary to load a bundled [Frida](https://frida.re) Gadget at launch, so you can attach with `frida -H <device-ip>:27042 -n Gadget` (or [objection](https://github.com/sensepost/objection)) and instrument it — including bypassing pinning — on a **non-jailbroken** device. No `frida-server`/root needed, since the agent runs in-process.
+- **Security Scan** *(always available)* — a static scan of an IPA that surfaces severity-graded findings (critical/high/medium/low/info) with title, category, file location, and code snippet — hardcoded secrets and keys, ATS misconfiguration, insecure storage patterns, and similar issues. Found values are redacted by default (toggle "Reveal values" to see them) and the full report can be exported as Markdown or JSON.
+- **Dump Decrypted Copy** *(Evil Mode)* — for a real App Store IPA (which is FairPlay-encrypted even when the app is free), this reads the already-decrypted binary out of a *running* instance of the app on a **jailbroken** source device you control, and patches that into a DRM-free copy you can then re-sign and test on a separate, non-jailbroken target device. This is the same technique tools like `frida-ios-dump` use: it captures memory the OS already decrypted to execute the app, rather than breaking FairPlay's cryptography. The target app needs to actually be open on the source device — if it lazily loads a framework you need dumped, trigger that code path first or the dump for that framework will fail.
 
 None of this replaces getting proper authorization before testing an app you don't own.
 

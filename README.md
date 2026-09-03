@@ -80,7 +80,7 @@ Full usage guide, screen by screen → **[USAGE.md](USAGE.md)**
 
 ## Security Testing
 
-ipaverse includes a small toolkit aimed at security researchers doing authorized iOS app testing: a **Security Testing Mode** toggle (disables ATS for MITM proxying), **Frida Gadget injection**, a static **Security Scan**, and a **Dump Decrypted Copy** tool for FairPlay apps on a jailbroken source device. Details on each → [USAGE.md § Security Testing](USAGE.md#security-testing).
+ipaverse includes a small toolkit aimed at security researchers doing authorized iOS app testing: a **Security Testing Mode** toggle (disables ATS for MITM proxying), **Frida Gadget injection**, and a **Dump Decrypted Copy** tool for FairPlay apps on a jailbroken source device. These — plus **Move to New Identity** in the Re-sign window — stay disabled until you turn on **Evil Mode**, a flame toggle in the main window's toolbar; the static **Security Scan** is read-only and always available regardless. Details on each → [USAGE.md § Security Testing](USAGE.md#security-testing).
 
 > ⚠️ **Educational and authorized use only.** These tools are meant for bug bounty programs, contracted pentests, or testing apps you own. Do not use them against apps, accounts, or systems you don't have explicit permission to test — misuse may violate Apple's terms of service and/or the law. ipaverse and its author take no responsibility for misuse.
 

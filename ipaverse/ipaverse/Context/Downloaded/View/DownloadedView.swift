@@ -24,6 +24,9 @@ struct DownloadedView: View {
     @State private var appToDump: DownloadedApp?
     @State private var isDropTargeted = false
     @State private var importError: String?
+    /// Gates "Dump Decrypted Copy" — pulls FairPlay-decrypted bytes out of a
+    /// jailbroken device's live memory via Frida — behind Evil Mode.
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     var body: some View {
         NavigationStack {
@@ -99,6 +102,8 @@ struct DownloadedView: View {
                             } label: {
                                 Label("Dump Decrypted Copy", systemImage: "lock.open.trianglebadge.exclamationmark")
                             }
+                            .disabled(!isEvilMode)
+                            .help(isEvilMode ? "" : "Enable Evil Mode from the toolbar to use this.")
 
                             Divider()
 

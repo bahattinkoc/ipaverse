@@ -12,6 +12,9 @@ struct MainView: View {
     @EnvironmentObject var loginViewModel: LoginVM
     @EnvironmentObject private var navigationState: AppNavigationState
     @Environment(\.openWindow) private var openWindow
+    /// Evil Mode toggle — currently just a red/filled flame in the toolbar
+    /// plus a footer indicator; no other UI reacts to it.
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +35,16 @@ struct MainView: View {
             }
             .navigationTitle("ipaverse")
             .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isEvilMode.toggle()
+                    } label: {
+                        Image(systemName: isEvilMode ? "flame.fill" : "flame")
+                            .font(.title2)
+                            .foregroundColor(isEvilMode ? .red : nil)
+                    }
+                    .help("Toggle Evil Mode")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         openWindow(id: "resign")
@@ -60,7 +73,13 @@ struct MainView: View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Text(Bundle.main.appName)
+                HStack(spacing: 4) {
+                    Text(Bundle.main.appName)
+                    if isEvilMode {
+                        Text("· Evil Mode")
+                            .foregroundColor(.red)
+                    }
+                }
                 Spacer()
                 Text("v\(Bundle.main.shortVersion)")
             }
