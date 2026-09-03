@@ -93,7 +93,13 @@ final class ResigningVM: ObservableObject {
     @Published var plistEntries: [PlistEntry] = []
     @Published var fileTree: [IPAFileNode] = []
     @Published var fileReplacements: [String: Data] = [:]
-    @Published var provisioningProfileURL: URL?
+    @Published var provisioningProfileURL: URL? {
+        didSet { refreshProfileCertificateFingerprints() }
+    }
+    /// SHA1 fingerprints of the certificates embedded in `provisioningProfileURL`'s
+    /// DeveloperCertificates array — empty until the profile is parsed, and
+    /// stays empty if it couldn't be read.
+    @Published private(set) var profileCertificateFingerprints: Set<String> = []
     @Published var state: State = .idle
     @Published var activeTab: Tab = .properties
     @Published var isAddingKey = false
@@ -128,6 +134,19 @@ final class ResigningVM: ObservableObject {
     }
 
     var isFairPlayWarning: Bool { state == .fairPlayWarning }
+
+    /// Certificates authorized by the selected provisioning profile. Falls back to
+    /// the full list when no profile is selected yet or the profile couldn't be parsed.
+    var matchingCertificates: [ResignerCertificate] {
+        guard provisioningProfileURL != nil, !profileCertificateFingerprints.isEmpty else { return certificates }
+        return certificates.filter { profileCertificateFingerprints.contains($0.id.uppercased()) }
+    }
+
+    /// True once a profile is selected and none of the locally available certificates
+    /// are in its DeveloperCertificates list — signing would fail on-device.
+    var hasNoCertificateMatchingProfile: Bool {
+        provisioningProfileURL != nil && !profileCertificateFingerprints.isEmpty && matchingCertificates.isEmpty
+    }
 
     var errorMessage: String? {
         if case .error(let msg) = state { return msg }
@@ -190,6 +209,26 @@ final class ResigningVM: ObservableObject {
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url else { return }
             Task { @MainActor [weak self] in self?.provisioningProfileURL = url }
+        }
+    }
+
+    private func refreshProfileCertificateFingerprints() {
+        guard let url = provisioningProfileURL else {
+            profileCertificateFingerprints = []
+            return
+        }
+        Task.detached { [weak self] in
+            let fingerprints = IPAResigner.developerCertificateFingerprints(from: url)
+            await MainActor.run {
+                guard let self, self.provisioningProfileURL == url else { return }
+                self.profileCertificateFingerprints = fingerprints
+                // Selected certificate no longer authorized by the new profile — switch
+                // to one that is, if any is available, so the picker doesn't stay stale.
+                if let selected = self.selectedCertificate,
+                   !fingerprints.isEmpty, !fingerprints.contains(selected.id.uppercased()) {
+                    self.selectedCertificate = self.matchingCertificates.first
+                }
+            }
         }
     }
 

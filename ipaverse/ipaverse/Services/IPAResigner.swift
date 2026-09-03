@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 // MARK: - Models
 
@@ -58,6 +59,7 @@ enum IPAResignError: LocalizedError {
     case appBundleNotFound
     case infoPlistNotFound
     case provisioningProfileRequired
+    case certificateNotInProfile(certificateName: String, profileName: String)
     case fairPlayEncrypted
     case processFailure(executable: String, stderr: String)
     case codesignFailed(String)
@@ -67,6 +69,8 @@ enum IPAResignError: LocalizedError {
         case .appBundleNotFound: "No .app bundle found inside Payload"
         case .infoPlistNotFound: "Info.plist not found"
         case .provisioningProfileRequired: "A provisioning profile (.mobileprovision) is required to install on a device"
+        case .certificateNotInProfile(let certName, let profileName):
+            "\"\(certName)\" is not authorized by \"\(profileName)\" — the profile's DeveloperCertificates list doesn't include this certificate's private key. Pick a provisioning profile generated for this exact certificate (Apple Developer portal → Profiles), or select a different certificate whose team issued this profile."
         case .fairPlayEncrypted:
             "This IPA is encrypted with FairPlay DRM. Re-signing does not work with encrypted App Store IPAs — only your own builds or decrypted IPAs can be signed."
         case .processFailure(let exe, let err): "\(URL(fileURLWithPath: exe).lastPathComponent) failed: \(err)"
@@ -363,6 +367,18 @@ struct IPAResigner {
         guard let profileURL = config.provisioningProfileURL else {
             throw IPAResignError.provisioningProfileRequired
         }
+
+        // installd rejects the install at the *device* with an opaque
+        // "valid provisioning profile not found" error if the signing
+        // certificate isn't one of the profile's DeveloperCertificates —
+        // catch that here instead, with the actual reason.
+        let profileCertFingerprints = Self.developerCertificateFingerprints(from: profileURL)
+        if !profileCertFingerprints.isEmpty && !profileCertFingerprints.contains(config.certificate.id.uppercased()) {
+            throw IPAResignError.certificateNotInProfile(
+                certificateName: config.certificate.name, profileName: profileURL.lastPathComponent
+            )
+        }
+
         try FileManager.default.copyItem(at: profileURL, to: appURL.appendingPathComponent("embedded.mobileprovision"))
         print("⚙️ [IPAResigner] mobileprovision embedded: \(profileURL.lastPathComponent)")
 
@@ -396,7 +412,7 @@ struct IPAResigner {
         progress("Signing...")
         try signInsideOut(appURL: appURL, certificate: config.certificate.id,
                           mainEntitlementsURL: entsURL, profileEntitlements: profileEntitlements,
-                          newTeamID: teamID, workDir: workDir)
+                          newTeamID: teamID, workDir: workDir, profileURL: profileURL)
 
         // 10. Create new IPA
         // -0: store without compression — binaries must not change through zip/unzip (page hash matching)
@@ -460,7 +476,8 @@ struct IPAResigner {
         mainEntitlementsURL: URL,
         profileEntitlements: [String: Any],
         newTeamID: String,
-        workDir: URL
+        workDir: URL,
+        profileURL: URL
     ) throws {
         let fm = FileManager.default
 
@@ -487,6 +504,12 @@ struct IPAResigner {
                         print("⚙️ [IPAResigner] codesign \(item.lastPathComponent): \(err.isEmpty ? "OK" : err)")
                     }
                 }
+                // installd requires each executable to carry its own embedded profile,
+                // not just matching entitlements — without this, install fails with
+                // "A valid provisioning profile for this executable was not found."
+                try? fm.removeItem(at: appex.appendingPathComponent("embedded.mobileprovision"))
+                try fm.copyItem(at: profileURL, to: appex.appendingPathComponent("embedded.mobileprovision"))
+
                 // Derive appex's own entitlements from the profile
                 let appexEntsURL = entitlementsURL(for: appex, profileEntitlements: profileEntitlements, newTeamID: newTeamID, workDir: workDir)
                 let err = try runProcessCapturingError(
@@ -656,6 +679,25 @@ struct IPAResigner {
         result["get-task-allow"] = true
 
         return result
+    }
+
+    // SHA1 fingerprints (uppercase hex, matching `security find-identity` / codesign -s format)
+    // of every certificate embedded in the profile's DeveloperCertificates array.
+    static func developerCertificateFingerprints(from profileURL: URL) -> Set<String> {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["cms", "-D", "-i", profileURL.path]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        guard (try? process.run()) != nil else { return [] }
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let profile = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              let certs = profile["DeveloperCertificates"] as? [Data] else { return [] }
+        return Set(certs.map { Insecure.SHA1.hash(data: $0).map { String(format: "%02X", $0) }.joined() })
     }
 
     private func extractEntitlements(from profileURL: URL) throws -> [String: Any] {

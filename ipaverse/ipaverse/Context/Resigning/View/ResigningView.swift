@@ -242,46 +242,58 @@ struct ResigningView: View {
             }
 
             // Certificate
-            HStack(spacing: 10) {
-                Label("Certificate", systemImage: "person.badge.key")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(width: 90, alignment: .leading)
-
-                if certificates.isEmpty {
-                    Text("No signing certificates found")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    Label("Certificate", systemImage: "person.badge.key")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Menu {
-                        ForEach(viewModel.certificates) { cert in
-                            Button(cert.displayName) {
-                                viewModel.selectedCertificate = cert
+                        .frame(width: 90, alignment: .leading)
+
+                    if certificates.isEmpty {
+                        Text("No signing certificates found")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Menu {
+                            ForEach(viewModel.matchingCertificates) { cert in
+                                Button(cert.displayName) {
+                                    viewModel.selectedCertificate = cert
+                                }
                             }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if let cert = viewModel.selectedCertificate {
-                                Text(cert.displayName)
-                                    .lineLimit(1)
-                                    .foregroundColor(.primary)
-                            } else {
-                                Text("Select a certificate...")
-                                    .foregroundColor(Color(NSColor.placeholderTextColor))
+                        } label: {
+                            HStack(spacing: 6) {
+                                if let cert = viewModel.selectedCertificate {
+                                    Text(cert.displayName)
+                                        .lineLimit(1)
+                                        .foregroundColor(.primary)
+                                } else {
+                                    Text("Select a certificate...")
+                                        .foregroundColor(Color(NSColor.placeholderTextColor))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption2)
+                                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                             }
-                            Spacer()
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption2)
-                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                            .font(.subheadline)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(7)
                         }
-                        .font(.subheadline)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .cornerRadius(7)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+
+                if viewModel.hasNoCertificateMatchingProfile {
+                    Label(
+                        "None of your local certificates are authorized by this provisioning profile's DeveloperCertificates list. Re-download the profile after adding this certificate on the Apple Developer portal.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.leading, 100)
                 }
             }
 

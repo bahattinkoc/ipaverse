@@ -285,7 +285,15 @@ struct ClassicDeviceInstaller {
         let contextPtr = Unmanaged.passUnretained(context).toOpaque()
         let rc = api.instproxyInstall(instClient, remotePath, nil, installStatusCallback, contextPtr)
 
-        guard rc == 0 else {
+        // instproxy_install can return success at the protocol level (the
+        // client/server message exchange completed cleanly) even though the
+        // device's *last reported status* was a failure — e.g. installd's own
+        // code-signature verification rejecting the app after the transfer
+        // and protocol handshake already succeeded. Trust the last status
+        // over the raw return code, since that's what actually reflects
+        // whether the app is usable on the device (a bare rc==0 here can
+        // silently leave the app as an unusable placeholder/"cloud" icon).
+        guard rc == 0, context.lastError == nil else {
             throw ClassicDeviceInstallerError.installFailed(context.lastError ?? "installation_proxy error \(rc)")
         }
 
