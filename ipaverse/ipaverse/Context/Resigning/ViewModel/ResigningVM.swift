@@ -308,15 +308,18 @@ final class ResigningVM: ObservableObject {
     /// deliberately not exhaustive, just the ones known to cause silent
     /// runtime failures (crashes or dead features) rather than install-time
     /// rejection.
-    private nonisolated static let watchedEntitlements: [(key: String, label: String)] = [
-        ("com.apple.security.application-groups", "App Groups"),
-        ("aps-environment", "Push Notifications"),
-        ("com.apple.developer.associated-domains", "Associated Domains"),
-        ("com.apple.developer.devicecheck.appattest-environment", "DeviceCheck / App Attest"),
-        ("com.apple.developer.nfc.readersession.formats", "NFC"),
-        ("com.apple.developer.healthkit", "HealthKit"),
-        ("com.apple.developer.in-app-payments", "Apple Pay"),
-    ]
+    private nonisolated static let watchedEntitlements: [(key: String, label: String)] = {
+        let labels: [String: String] = [
+            "com.apple.security.application-groups": "App Groups",
+            "aps-environment": "Push Notifications",
+            "com.apple.developer.associated-domains": "Associated Domains",
+            "com.apple.developer.devicecheck.appattest-environment": "DeviceCheck / App Attest",
+            "com.apple.developer.nfc.readersession.formats": "NFC",
+            "com.apple.developer.healthkit": "HealthKit",
+            "com.apple.developer.in-app-payments": "Apple Pay",
+        ]
+        return IPAResigner.watchedCapabilityKeys.map { ($0, labels[$0] ?? $0) }
+    }()
 
     private func refreshEntitlementWarnings() {
         guard let profileURL = provisioningProfileURL, !originalEntitlements.isEmpty else {
@@ -355,7 +358,16 @@ final class ResigningVM: ObservableObject {
                 continue
             }
             if let originalArray = originalValue as? [String] {
-                let expectedArray = originalArray.map { identityReplacements[$0] ?? $0 }
+                // Case-insensitive lookup: `identityReplacements`' keys carry
+                // CFBundleIdentifier's own casing (e.g. "com.turkcell.CSI"),
+                // but the actual entitlement value being remapped here comes
+                // from the app's real code signature and may use different
+                // casing (e.g. "group.com.turkcell.csi", all-lowercase) — an
+                // exact dictionary lookup silently misses that pairing and
+                // leaves the old (now-wrong) value in place.
+                let expectedArray = originalArray.map { value in
+                    identityReplacements.first { $0.key.caseInsensitiveCompare(value) == .orderedSame }?.value ?? value
+                }
                 let profileArray = (profileValue as? [String]) ?? []
                 if profileArray.isEmpty {
                     warnings.append("\(label) is an empty array in the profile — attach the resource to the App ID's capability and regenerate the profile.")
@@ -546,7 +558,8 @@ final class ResigningVM: ObservableObject {
             provisioningProfileURL: provisioningProfileURL,
             enableSecurityTestingMode: enableSecurityTestingMode,
             enableFridaGadgetInjection: enableFridaGadgetInjection,
-            removedFrameworks: Array(frameworksToRemove)
+            removedFrameworks: Array(frameworksToRemove),
+            binaryStringReplacements: appliedIdentityReplacements.map { (old: $0.key, new: $0.value) }
         )
         let ipaPath = downloadedApp.filePath
 

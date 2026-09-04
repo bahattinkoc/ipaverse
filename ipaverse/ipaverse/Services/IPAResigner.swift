@@ -51,6 +51,13 @@ struct ResignConfig: @unchecked Sendable {
     /// App Groups, ...) is missing instead of degrading gracefully. See
     /// FrameworkStripper.
     var removedFrameworks: [String] = []
+    /// Old → new string pairs to overwrite directly inside every Mach-O
+    /// binary in the bundle — for an SDK that bakes its own identity string
+    /// (an App Group name, ...) into compiled code instead of reading it from
+    /// a plist/json config file, which BundleIdentityMigrator can't reach.
+    /// See BinaryStringPatcher; each `new` must be no longer (in UTF-8 bytes)
+    /// than its `old`.
+    var binaryStringReplacements: [(old: String, new: String)] = []
 }
 
 struct IPAFileNode: Identifiable, Sendable {
@@ -376,6 +383,15 @@ struct IPAResigner {
             try FrameworkStripper.remove(frameworkNames: config.removedFrameworks, from: appURL, progress: progress)
         }
 
+        // 4.3 Patch identity strings baked directly into compiled binaries —
+        // the class of reference BundleIdentityMigrator's plist/json scan
+        // can't reach. Same old→new pairs as the plist migration, so it's a
+        // no-op unless "Move to New Identity" was actually applied.
+        if !config.binaryStringReplacements.isEmpty {
+            progress("Patching identity strings...")
+            try BinaryStringPatcher.patch(config.binaryStringReplacements, in: appURL, progress: progress)
+        }
+
         // 4.5 Inject Frida Gadget (Security Testing Mode: dynamic instrumentation
         // without a jailbreak — attach with `frida -H <device-ip>:27042 -n Gadget`)
         if config.enableFridaGadgetInjection {
@@ -684,6 +700,26 @@ struct IPAResigner {
         }
         return false
     }
+
+    /// Capabilities that commonly crash an app at launch — not just get
+    /// rejected at install — when the original build had them but the
+    /// resigning profile doesn't grant them: an SDK checks for the
+    /// capability during init (e.g. a push SDK's DI container fatalError-ing
+    /// on an unresolved registration) instead of degrading gracefully. Used
+    /// by the pre-sign warning UI (ResigningVM.watchedEntitlements) to flag
+    /// the gap — fixing it means getting the capability actually added to
+    /// the App ID/profile (or migrating the app off whatever hardcodes the
+    /// missing one — see BundleIdentityMigrator/BinaryStringPatcher), not
+    /// forcing an unauthorized entitlement into the signature.
+    static let watchedCapabilityKeys: [String] = [
+        "com.apple.security.application-groups",
+        "aps-environment",
+        "com.apple.developer.associated-domains",
+        "com.apple.developer.devicecheck.appattest-environment",
+        "com.apple.developer.nfc.readersession.formats",
+        "com.apple.developer.healthkit",
+        "com.apple.developer.in-app-payments",
+    ]
 
     // Expands profile entitlements wildcards and prepares them for signing.
     // Only entitlements authorized by the profile are used; no unauthorized keys are added.

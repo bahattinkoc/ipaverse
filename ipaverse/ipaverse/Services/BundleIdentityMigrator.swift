@@ -49,11 +49,22 @@ struct BundleIdentityMigrator {
             let ext = (entry as NSString).pathExtension.lowercased()
             guard ext == "plist" || ext == "json" else { continue }
             guard (entry as NSString).lastPathComponent != "Info.plist" else { continue }
+            // SC_Info/ is Apple's leftover FairPlay manifest bookkeeping — no
+            // app or SDK reads it at runtime, and rewriting its content (text
+            // substitution + binary→XML re-serialization) risks confusing
+            // whatever DRM/signature-adjacent validation still looks at it,
+            // for zero actual benefit. Out of scope for identity migration.
+            guard !entry.contains("/SC_Info/") else { continue }
 
             guard let data = try? IPAResigner.readEntry(ipaPath: ipaPath, entryName: entry),
                   let text = decodedText(from: data, isPlist: ext == "plist") else { continue }
 
-            let matched = nonEmptyNeedles.filter { text.contains($0) }
+            // Case-insensitive: an SDK's own config can reference the bundle ID
+            // or App Group in different casing than CFBundleIdentifier itself
+            // (e.g. "group.com.turkcell.csi" vs. bundle ID "com.turkcell.CSI") —
+            // a case-sensitive match silently misses exactly the file this scan
+            // exists to catch.
+            let matched = nonEmptyNeedles.filter { text.range(of: $0, options: .caseInsensitive) != nil }
             if !matched.isEmpty {
                 results.append(IdentityReference(path: entry, matchedStrings: matched))
             }
@@ -74,7 +85,10 @@ struct BundleIdentityMigrator {
             let isPlist = (reference.path as NSString).pathExtension.lowercased() == "plist"
             guard var text = decodedText(from: original, isPlist: isPlist) else { continue }
             for (old, new) in replacements where !old.isEmpty {
-                text = text.replacingOccurrences(of: old, with: new)
+                // Case-insensitive to match the scan above — replaces whatever
+                // casing the file actually used, not just an exact match of
+                // the needle we searched with.
+                text = text.replacingOccurrences(of: old, with: new, options: .caseInsensitive)
             }
             results[reference.path] = Data(text.utf8)
         }

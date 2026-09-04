@@ -286,6 +286,11 @@ struct ResigningView: View {
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
+
+                    Text("Add the capability to the App ID on the Apple Developer portal and regenerate the profile — or, if an SDK bakes the missing identifier into its own compiled code (not a plist), \"Move to New Identity\" can patch that too.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, 100)
             }
