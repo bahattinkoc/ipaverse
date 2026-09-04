@@ -51,15 +51,33 @@ enum FridaDumperError: LocalizedError {
         case .deviceManagerFailed(let msg): "Couldn't talk to Frida: \(msg)"
         case .noUSBDeviceFound: "No USB device found. Connect the jailbroken device and make sure frida-server is running on it."
         case .appNotRunning(let name): "\"\(name)\" doesn't seem to be running on the device. Open it and use it for a bit first, then try again."
-        case .attachFailed(let msg): "Failed to attach to the app: \(msg)"
-        case .scriptFailed(let msg): "Dump script failed: \(msg)"
-        case .dumpTimedOut: "Timed out waiting for the dump. Make sure the app is in the foreground and try again."
+        case .attachFailed(let msg): "Failed to attach to the app: \(msg)\(Self.antiFridaHint)"
+        case .scriptFailed(let msg): "Dump script failed: \(msg)\(Self.antiFridaHint)"
+        case .dumpTimedOut: "Timed out waiting for the dump. Make sure the app is in the foreground and try again.\(Self.antiFridaHint)"
         case .dumpMessageInvalid(let msg): "Unexpected response from the dump script: \(msg)"
         case .noEncryptedSegmentFound: "This binary has no FairPlay-encrypted segment (LC_ENCRYPTION_INFO) — it may already be DRM-free."
         case .segmentSizeMismatch(let expected, let got):
             "Dumped segment size (\(got) bytes) doesn't match the on-disk encrypted segment (\(expected) bytes)."
         case .ipaStructureInvalid: "Couldn't find a .app bundle inside this IPA."
         }
+    }
+
+    /// Appended to the failure modes a hardened app (banking apps especially)
+    /// produces when it detects `frida-server` running on the device and
+    /// voluntarily exits — not a crash (no crash report), just the app's own
+    /// RASP code calling exit() the moment it sees Frida attach, typically by
+    /// scanning the process list for the literal name "frida-server". Not
+    /// something ipaverse can work around on its own: fixing it means hiding
+    /// frida-server on the device itself (rename the binary and its
+    /// LaunchDaemon, keep the same port — connecting over USB doesn't depend
+    /// on the process name, so this doesn't break anything else that uses it).
+    private static var antiFridaHint: String {
+        " If the app closed right as this started, it may have detected " +
+        "frida-server (many banking apps scan the process list for the name " +
+        "\"frida-server\" and exit on sight) rather than crashed — check the " +
+        "device's crash log: a clean/voluntary exit with no report points to " +
+        "detection, not a bug. Renaming the frida-server binary and its " +
+        "LaunchDaemon on the device (same port) usually fixes this."
     }
 }
 
