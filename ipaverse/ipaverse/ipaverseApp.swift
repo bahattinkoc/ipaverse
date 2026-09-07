@@ -19,6 +19,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for window in NSApp.windows where window.identifier?.rawValue != "main" {
             window.close()
         }
+
+        // AppKit's "smart" quote/dash/text substitution silently rewrites
+        // what's typed into every NSTextField/NSTextView (SwiftUI's
+        // TextField/TextEditor included) — great for prose, actively
+        // corrupts a technical tool like this one where every text field
+        // holds exact syntax that has to round-trip byte-for-byte (JSON
+        // request/response bodies and headers in Frida Toolkit's network
+        // intercept editor, class/method names, search queries). Registered
+        // (not `set`) so it's a fallback default scoped to this app's own
+        // preferences domain, not a system-wide change.
+        UserDefaults.standard.register(defaults: [
+            "NSAutomaticQuoteSubstitutionEnabled": false,
+            "NSAutomaticDashSubstitutionEnabled": false,
+            "NSAutomaticTextReplacementEnabled": false,
+        ])
     }
 }
 
@@ -36,6 +51,11 @@ struct ipaverseApp: App {
     @StateObject private var loginViewModel = LoginVM()
     @StateObject private var navigationState = AppNavigationState()
     @Environment(\.openWindow) private var openWindow
+    /// Mirrors `DownloadedView`'s gate on the same feature — the File menu
+    /// is a second way to open the exact same Reverse Engineer window, so it
+    /// needs the same Evil Mode check or it'd bypass the one on the context
+    /// menu entirely.
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     // A single, explicitly-shared ModelContainer — letting SwiftUI create one
     // per `.modelContainer(for:)` call (even pointed at the same store file)
@@ -66,6 +86,12 @@ struct ipaverseApp: App {
                     openWindow(id: "resign")
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Button("Reverse Engineer…") {
+                    openWindow(id: "securityScan")
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(!isEvilMode)
             }
             CommandMenu("Go") {
                 Button("Downloaded") {
@@ -85,6 +111,11 @@ struct ipaverseApp: App {
         WindowGroup(id: "resign", for: String.self) { $appID in
             ResigningWindowView(appID: appID)
                 .environmentObject(loginViewModel)
+        }
+        .modelContainer(modelContainer)
+
+        WindowGroup(id: "securityScan", for: String.self) { $appID in
+            SecurityScanWindowView(appID: appID)
         }
         .modelContainer(modelContainer)
 

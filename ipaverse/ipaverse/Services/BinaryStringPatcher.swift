@@ -176,7 +176,7 @@ struct BinaryStringPatcher {
     /// are simply skipped by the caller — not every framework has one).
     private static func cstringSectionRange(in data: Data) -> Range<Data.Index>? {
         guard data.count >= machHeaderSize else { return nil }
-        func u32(_ offset: Int) -> UInt32 { data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) } }
+        func u32(_ offset: Int) -> UInt32 { data.safeUInt32(at: offset) ?? 0 }
         guard u32(0) == machMagic64 else { return nil }
 
         let ncmds = Int(u32(16))

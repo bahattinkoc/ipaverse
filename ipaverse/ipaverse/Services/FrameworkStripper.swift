@@ -88,7 +88,7 @@ struct FrameworkStripper {
         guard data.count >= machHeaderSize else { throw FrameworkStripperError.unsupportedBinaryFormat }
 
         func u32(_ offset: Int) -> UInt32 {
-            data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) }
+            data.safeUInt32(at: offset) ?? 0
         }
         func setU32(_ offset: Int, _ value: UInt32) {
             withUnsafeBytes(of: value) { data.replaceSubrange(offset..<offset + 4, with: $0) }

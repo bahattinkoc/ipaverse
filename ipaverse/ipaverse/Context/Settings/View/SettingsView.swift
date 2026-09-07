@@ -25,10 +25,13 @@ struct SettingsView: View {
             searchTab
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
 
+            ExternalToolsView()
+                .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+
             AboutView()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 480, height: 440)
+        .frame(width: 560, height: 520)
     }
 
     // MARK: - Tabs

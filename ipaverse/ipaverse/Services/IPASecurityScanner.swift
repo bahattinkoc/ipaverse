@@ -48,11 +48,36 @@ struct SecurityFinding: Identifiable {
     var rawValue: String?  // unredacted value, revealed on demand (secrets only)
 }
 
+/// One file or binary's worth of extracted text, kept in memory (not on
+/// disk — the extraction tmpDir is removed as soon as `scan()` returns) so
+/// the manual search box can grep across everything the automatic scan
+/// already read, without re-extracting the IPA.
+struct SearchCorpusEntry {
+    let location: String
+    let text: String
+}
+
 struct SecurityScanResult {
     let appName: String
     let findings: [SecurityFinding]
     let scannedFileCount: Int
     let date: Date
+    /// Relative paths of Mach-O binaries that are still FairPlay-encrypted.
+    let encryptedBinaries: [String]
+    /// Total Mach-O binaries found in the bundle (encrypted + decrypted) —
+    /// compared against `encryptedBinaries.count` to tell "nothing's been
+    /// dumped yet" (uninteresting, matches what Downloaded already shows)
+    /// apart from "some binaries decrypted, some not" (a real surprise
+    /// worth a banner — e.g. an appex that Dump can't reach).
+    let totalBinariesScanned: Int
+    let searchCorpus: [SearchCorpusEntry]
+
+    /// Only true when decryption is inconsistent across the bundle — not
+    /// merely "this hasn't been dumped" (Downloaded's own tag already says
+    /// that) and not "fully dumped" (nothing left to warn about).
+    var hasPartiallyEncryptedBinaries: Bool {
+        !encryptedBinaries.isEmpty && encryptedBinaries.count < totalBinariesScanned
+    }
 
     var sortedFindings: [SecurityFinding] {
         findings.sorted {
@@ -92,6 +117,8 @@ private final class ScanAccumulator {
     var firebaseHosts = Set<String>()
     var awsEndpoints = Set<String>()
     var internalHosts = Set<String>()
+    var encryptedBinaryPaths = Set<String>()
+    var searchCorpus: [SearchCorpusEntry] = []
 
     func add(_ f: SecurityFinding) {
         let key = "\(f.severity.rawValue)|\(f.category)|\(f.title)|\(f.location ?? "")|\(f.snippet ?? "")"
@@ -154,15 +181,18 @@ struct IPASecurityScanner {
 
                 if isTextLike(url: url, size: size), let text = readText(at: url) {
                     scanText(text, location: rel, source: "file", into: acc)
+                    acc.searchCorpus.append(SearchCorpusEntry(location: rel, text: text))
                 }
             }
         }
 
         // 5. Mach-O binaries (main executable + frameworks + appex + dylibs)
         progress("Scanning app binaries…")
-        for binURL in machOBinaries(in: appURL) {
+        let machOTargets = machOBinaries(in: appURL)
+        for binURL in machOTargets {
             let rel = displayPath(binURL.path)
-            scanMachO(at: binURL, location: rel, into: acc)
+            let isMain = binURL.deletingLastPathComponent().standardizedFileURL == appURL.standardizedFileURL
+            scanMachO(at: binURL, location: rel, isMainExecutable: isMain, into: acc)
         }
 
         // 6. Emit aggregated network/endpoint findings
@@ -173,7 +203,10 @@ struct IPASecurityScanner {
             appName: appName,
             findings: acc.findings,
             scannedFileCount: scannedFiles,
-            date: Date()
+            date: Date(),
+            encryptedBinaries: acc.encryptedBinaryPaths.sorted(),
+            totalBinariesScanned: machOTargets.count,
+            searchCorpus: acc.searchCorpus
         )
     }
 
@@ -487,7 +520,9 @@ struct IPASecurityScanner {
 
     /// All Mach-O binaries inside the app bundle: main executable, framework /
     /// appex executables, and dylibs. Detected by magic bytes, not extension.
-    private static func machOBinaries(in appURL: URL) -> [URL] {
+    /// Not private: reused by `ClassDumper` so bundle-walking logic (and its
+    /// Mach-O detection) has exactly one implementation.
+    static func machOBinaries(in appURL: URL) -> [URL] {
         let fm = FileManager.default
         var result: [URL] = []
         guard let en = fm.enumerator(at: appURL, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { return [] }
@@ -502,24 +537,205 @@ struct IPASecurityScanner {
         return result
     }
 
-    private static func isMachO(_ url: URL) -> Bool {
+    static func isMachO(_ url: URL) -> Bool {
         guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? fh.close() }
         guard let head = try? fh.read(upToCount: 4), head.count == 4 else { return false }
-        let magic = head.withUnsafeBytes { $0.load(as: UInt32.self) }
+        guard let magic = head.safeUInt32(at: 0) else { return false }
         // 32/64-bit thin (BE/LE) + fat (universal) magics.
         let machos: Set<UInt32> = [0xFEEDFACE, 0xFEEDFACF, 0xCEFAEDFE, 0xCFFAEDFE,
                                    0xCAFEBABE, 0xBEBAFECA, 0xCAFEBABF, 0xBFBAFECA]
         return machos.contains(magic)
     }
 
-    private static func scanMachO(at url: URL, location: String, into acc: ScanAccumulator) {
-        // Two string encodings: 7/8-bit (S) and 16-bit little-endian (l).
-        for encoding in ["S", "l"] {
-            let data = runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", encoding, url.path])
-            guard let out = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1),
-                  !out.isEmpty else { continue }
+    private static func scanMachO(at url: URL, location: String, isMainExecutable: Bool, into acc: ScanAccumulator) {
+        // FairPlay only encrypts __TEXT (code + literal strings + ObjC
+        // selector names) of the main executable and, occasionally, a
+        // bundled framework. When encrypted, `strings`/marker matching over
+        // that range is noise — flag it and skip the string-content-dependent
+        // passes below, but still run the imported-symbol pass (unencrypted
+        // __LINKEDIT works regardless).
+        let encrypted = IPAResigner.isFairPlayEncrypted(binaryURL: url)
+        if encrypted {
+            acc.encryptedBinaryPaths.insert(location)
+            acc.add(SecurityFinding(
+                severity: isMainExecutable ? .medium : .info,
+                category: "Binary",
+                title: isMainExecutable
+                    ? "Main binary is FairPlay-encrypted — deep analysis unavailable"
+                    : "Embedded binary is FairPlay-encrypted",
+                detail: "This binary is still DRM-protected, so hardcoded secrets, endpoints, and jailbreak/pinning-detection strings compiled into its own code can't be recovered from static analysis. Use \"Dump Decrypted Copy\" (Evil Mode, requires a jailbroken source device over USB) to produce a DRM-free copy, then re-scan for full results.",
+                location: location, snippet: nil))
+        }
+
+        // Primary pass: default (7/8-bit ASCII) strings extraction — this is
+        // the workhorse and must not depend on `-e`, which the `strings`
+        // Xcode's Command Line Tools ships (routed through the `xcrun` shim
+        // at /usr/bin/strings) rejects outright ("unknown flag: -e") on
+        // current toolchains, silently producing empty output and skipping
+        // every binary-string-derived finding — secrets, endpoints, and the
+        // anti-analysis/pinning markers below — without any visible error.
+        var asciiText: String?
+        let primary = runProcess("/usr/bin/strings", ["-a", "-n", "6", url.path])
+        if let out = String(data: primary, encoding: .utf8) ?? String(data: primary, encoding: .isoLatin1),
+           !out.isEmpty {
             scanText(out, location: location, source: "binary", into: acc)
+            acc.searchCorpus.append(SearchCorpusEntry(location: location, text: out))
+            asciiText = out
+        }
+
+        // Best-effort 16-bit (UTF-16LE) pass — some strings only live in this
+        // form. Kept behind `-e`, so on a toolchain that rejects the flag it
+        // just yields empty output and is silently skipped; the primary pass
+        // above no longer depends on it succeeding.
+        let wide = runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", "l", url.path])
+        if let out = String(data: wide, encoding: .utf8) ?? String(data: wide, encoding: .isoLatin1),
+           !out.isEmpty {
+            scanText(out, location: location, source: "binary", into: acc)
+        }
+
+        // Imported-symbol pass: the symbol table lives in __LINKEDIT, which
+        // FairPlay never touches, so this works even on an encrypted binary.
+        scanImportedSymbols(at: url, location: location, into: acc)
+
+        // Marker passes need real string content to match against — pointless
+        // on an encrypted __TEXT (would just match ciphertext noise).
+        if !encrypted, let text = asciiText {
+            scanMarkers(antiAnalysisMarkers, in: text, location: location, into: acc)
+            scanMarkers(pinningMarkers, in: text, location: location, into: acc)
+        }
+    }
+
+    // MARK: - Pass 5b: Imported symbols (works even on an encrypted binary)
+
+    private struct ImportRule {
+        let symbol: String
+        let category: String
+        let severity: FindingSeverity
+        let title: String
+        let detail: String
+    }
+
+    /// Curated set of C functions / Obj-C classes whose mere presence in the
+    /// import table is a meaningful signal: anti-debug/anti-jailbreak checks,
+    /// custom TLS trust evaluation (pinning), weak hash primitives, and
+    /// hardware-backed attestation/biometrics. All of these names live in
+    /// __LINKEDIT's undefined-symbol table, so `nm -u` sees them regardless
+    /// of whether __TEXT is FairPlay-encrypted.
+    private static let importRules: [ImportRule] = [
+        ImportRule(symbol: "_ptrace", category: "Anti-Analysis", severity: .medium,
+                   title: "Imports ptrace — likely anti-debugger check",
+                   detail: "PT_DENY_ATTACH via ptrace() is the classic iOS anti-debugging trick; a debugger (including some Frida usage) attaching may cause the app to exit."),
+        ImportRule(symbol: "_sysctl", category: "Anti-Analysis", severity: .medium,
+                   title: "Imports sysctl — possible debugger/jailbreak detection",
+                   detail: "sysctl(KERN_PROC) is commonly used to check the P_TRACED flag (debugger attached) or to fingerprint the device for jailbreak detection."),
+        ImportRule(symbol: "_sysctlbyname", category: "Anti-Analysis", severity: .medium,
+                   title: "Imports sysctlbyname — possible debugger/jailbreak detection",
+                   detail: "Same purpose as sysctl(): often used to read kernel/process state for anti-debug or anti-jailbreak checks."),
+        ImportRule(symbol: "_csops", category: "Anti-Analysis", severity: .medium,
+                   title: "Imports csops — possible debugger detection (CS_DEBUGGED)",
+                   detail: "csops() can query the CS_DEBUGGED code-signing flag to detect an attached debugger."),
+        ImportRule(symbol: "_SecTrustSetAnchorCertificates", category: "Pinning", severity: .medium,
+                   title: "Imports SecTrustSetAnchorCertificates — custom trust anchors",
+                   detail: "The app installs its own trust anchors instead of relying solely on the system trust store — a common building block of certificate pinning. Security Testing Mode's ATS bypass alone will not defeat this; the pinning logic itself needs to be patched or hooked."),
+        ImportRule(symbol: "_SecTrustSetPolicies", category: "Pinning", severity: .medium,
+                   title: "Imports SecTrustSetPolicies — custom trust evaluation policy",
+                   detail: "A custom SecPolicy is applied to trust evaluation — often part of a certificate/public-key pinning implementation."),
+        ImportRule(symbol: "_SecTrustEvaluateWithError", category: "Pinning", severity: .info,
+                   title: "Imports SecTrustEvaluateWithError — manual TLS trust evaluation",
+                   detail: "The app evaluates server trust itself rather than only relying on URLSession's default handling — check whether it implements pinning, and whether it can be tricked into trusting anything."),
+        ImportRule(symbol: "_CC_MD5", category: "Crypto", severity: .low,
+                   title: "Links CC_MD5 — MD5 is cryptographically broken",
+                   detail: "MD5 should not be used for anything security-sensitive (integrity, signatures, password hashing). May be legitimate for non-security checksums — verify the call site once decrypted."),
+        ImportRule(symbol: "_CC_SHA1", category: "Crypto", severity: .low,
+                   title: "Links CC_SHA1 — SHA-1 is deprecated for security use",
+                   detail: "SHA-1 collision attacks are practical; it shouldn't be used for signatures or integrity guarantees. May be legitimate for non-security use — verify the call site once decrypted."),
+        ImportRule(symbol: "_OBJC_CLASS_$_LAContext", category: "Biometric", severity: .info,
+                   title: "Uses LAContext — biometric/passcode authentication",
+                   detail: "The app calls into LocalAuthentication (Face ID / Touch ID / device passcode). Check whether the result is trusted locally only or re-verified server-side."),
+        ImportRule(symbol: "_OBJC_CLASS_$_DCAppAttestService", category: "Attestation", severity: .info,
+                   title: "Uses DeviceCheck App Attest",
+                   detail: "App Attest is Apple's hardware-backed anti-tampering/anti-emulation attestation — expect requests to fail on a jailbroken, emulated, or resigned build unless this is bypassed server-side or hooked."),
+        ImportRule(symbol: "_OBJC_CLASS_$_DCDevice", category: "Attestation", severity: .info,
+                   title: "Uses DeviceCheck",
+                   detail: "DeviceCheck can be used for device reputation / anti-fraud / anti-abuse — expect it to behave differently on a resigned or jailbroken device."),
+        ImportRule(symbol: "_OBJC_CLASS_$_ASAuthorizationAppleIDProvider", category: "Info", severity: .info,
+                   title: "Supports Sign in with Apple",
+                   detail: "The app integrates Sign in with Apple."),
+    ]
+
+    private static func scanImportedSymbols(at url: URL, location: String, into acc: ScanAccumulator) {
+        let data = runProcess("/usr/bin/nm", ["-u", url.path])
+        guard let out = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1),
+              !out.isEmpty else { return }
+        for rule in importRules where out.contains(rule.symbol) {
+            acc.add(SecurityFinding(severity: rule.severity, category: rule.category,
+                                    title: rule.title, detail: rule.detail,
+                                    location: location, snippet: rule.symbol))
+        }
+    }
+
+    // MARK: - Pass 5c: Anti-analysis & pinning string markers (needs decrypted __TEXT)
+
+    private struct MarkerRule {
+        let regex: NSRegularExpression
+        let category: String
+        let severity: FindingSeverity
+        let title: String
+        let detail: String
+    }
+
+    private static func marker(_ p: String, _ category: String, _ severity: FindingSeverity, _ title: String, _ detail: String) -> MarkerRule {
+        MarkerRule(regex: rx(p), category: category, severity: severity, title: title, detail: detail)
+    }
+
+    private static let antiAnalysisMarkers: [MarkerRule] = [
+        marker("(?i)frida-server", "Anti-Analysis", .high,
+               "References \"frida-server\" — actively detects Frida",
+               "The binary contains a literal check for the Frida server process/binary name. Many hardened apps (banking apps especially) exit silently the moment they see this — often mistaken for a crash, not a detection. Renaming frida-server (and its LaunchDaemon) on the jailbroken device, keeping the same port, usually defeats a name-based check like this."),
+        marker("(?i)fridagadget", "Anti-Analysis", .high,
+               "References \"FridaGadget\" — actively detects the Frida gadget",
+               "The binary checks for the Frida Gadget dylib by name — relevant if you're using ipaverse's \"Inject Frida Gadget\" feature, since the gadget is loaded under this name by default."),
+        marker("(?i)\\bcynject\\b", "Anti-Analysis", .medium,
+               "References \"cynject\" — Cydia Substrate injection detection",
+               "Checks for Cydia Substrate's injector, a common jailbreak-tooling fingerprint."),
+        marker("(?i)mobilesubstrate|libsubstrate", "Anti-Analysis", .medium,
+               "References MobileSubstrate — jailbreak/tweak-injection detection",
+               "Checks for the MobileSubstrate/Substrate hooking framework used by most jailbreak tweaks."),
+        marker("/Applications/Cydia\\.app", "Anti-Analysis", .medium,
+               "Checks for Cydia.app — jailbreak detection",
+               "A hardcoded filesystem check for Cydia is a classic jailbreak-detection heuristic."),
+        marker("(?i)/private/var/(lib/apt|stash|lib/cydia)", "Anti-Analysis", .medium,
+               "Checks jailbreak filesystem paths",
+               "Hardcoded checks against common jailbreak filesystem artifacts (APT's package DB, Cydia's stash, etc.)."),
+        marker("(?i)\\bcycript\\b", "Anti-Analysis", .low,
+               "References \"cycript\" — reverse-engineering tool detection",
+               "Checks for the Cycript runtime-exploration tool."),
+    ]
+
+    private static let pinningMarkers: [MarkerRule] = [
+        marker("\\bTrustKit\\b", "Pinning", .medium,
+               "Bundles TrustKit — certificate pinning library",
+               "TrustKit implements SSL pinning with pin-set enforcement and reporting. ATS bypass alone will not defeat this; the pin set (Info.plist TSKConfiguration, or code) needs to be patched or hooked at runtime."),
+        marker("AFSecurityPolicy", "Pinning", .medium,
+               "Uses AFNetworking's AFSecurityPolicy — possible certificate pinning",
+               "AFSecurityPolicy can be configured for certificate or public-key pinning (SSLPinningMode). Check whether it's set to .none (no pinning) or an active pinning mode."),
+        marker("(?i)pinnedcertificates|pinnedpublickeys", "Pinning", .medium,
+               "References pinned certificates/public keys",
+               "A pinning implementation appears to ship its own trusted certificate or public-key set."),
+        marker("kTSKConfiguration", "Pinning", .medium,
+               "TrustKit pin configuration key present",
+               "The TSKConfiguration dictionary key suggests TrustKit pinning is configured, likely in Info.plist or in code."),
+    ]
+
+    private static func scanMarkers(_ rules: [MarkerRule], in text: String, location: String, into acc: ScanAccumulator) {
+        let full = NSRange(location: 0, length: (text as NSString).length)
+        for rule in rules {
+            guard let m = rule.regex.firstMatch(in: text, options: [], range: full) else { continue }
+            let snippet = (text as NSString).substring(with: m.range)
+            acc.add(SecurityFinding(severity: rule.severity, category: rule.category,
+                                    title: rule.title, detail: rule.detail,
+                                    location: location, snippet: snippet))
         }
     }
 
@@ -626,20 +842,46 @@ struct IPASecurityScanner {
 
     // MARK: - Process / IO helpers
 
-    private static func extract(ipaPath: String, to dir: URL) throws {
+    static func extract(ipaPath: String, to dir: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         process.arguments = ["-x", "-k", ipaPath, dir.path]
         process.useUTF8Locale()
+        let outPipe = Pipe()
         let errPipe = Pipe()
-        process.standardOutput = Pipe()
+        process.standardOutput = outPipe
         process.standardError = errPipe
         try process.run()
-        let err = errPipe.fileHandleForReading.readDataToEndOfFile()
+        // Both streams must be drained concurrently, not one after the
+        // other: the old code left stdout completely unread, so a `ditto`
+        // run that writes anything past the 64KB kernel pipe buffer to
+        // stdout (unusual entries — resource forks, xattrs, overwrite
+        // notices — can trigger this on some IPAs) blocks on that write
+        // forever, and since it can then never finish writing stderr or
+        // exit either, the stderr read below hangs right along with it.
+        let (_, err) = drainConcurrently(outPipe, errPipe)
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw SecurityScanError.extractionFailed(String(data: err, encoding: .utf8) ?? "exit \(process.terminationStatus)")
         }
+    }
+
+    /// Reads `primary` and `secondary` concurrently (one on a background
+    /// queue, one on the caller's thread) so neither can block the other's
+    /// producer by leaving its pipe undrained while it fills — the classic
+    /// deadlock a naive "read A fully, then read B" sequence risks whenever
+    /// a process writes enough to both streams.
+    static func drainConcurrently(_ primary: Pipe, _ secondary: Pipe) -> (primary: Data, secondary: Data) {
+        let queue = DispatchQueue(label: "ipaverse.IPASecurityScanner.drain")
+        var secondaryData = Data()
+        let done = DispatchSemaphore(value: 0)
+        queue.async {
+            secondaryData = secondary.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
+        let primaryData = primary.fileHandleForReading.readDataToEndOfFile()
+        done.wait()
+        return (primaryData, secondaryData)
     }
 
     private static func decodeMobileProvision(at url: URL) -> [String: Any]? {
@@ -649,17 +891,32 @@ struct IPASecurityScanner {
 
     /// Runs a CLI tool and returns stdout. UTF-8 safe; reads before waiting to
     /// avoid pipe-buffer deadlock on large output (e.g. `strings` on a big binary).
-    private static func runProcess(_ launchPath: String, _ args: [String]) -> Data {
+    static func runProcess(_ launchPath: String, _ args: [String]) -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = args
         process.useUTF8Locale()
         let outPipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = Pipe()
-        do { try process.run() } catch { return Data() }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        process.standardError = errPipe
+        do { try process.run() } catch {
+            print("⚙️ [IPASecurityScanner] failed to launch \(launchPath): \(error)")
+            return Data()
+        }
+        // Concurrent, not sequential (`outPipe` fully, then `errPipe`) —
+        // see `drainConcurrently`'s doc comment for why the sequential form
+        // that used to be here can deadlock.
+        let (data, errData) = drainConcurrently(outPipe, errPipe)
         process.waitUntilExit()
+        // A failing tool invocation (unsupported flag, missing binary, bad
+        // input) otherwise looks identical to "found nothing" — this class of
+        // bug is easy to ship silently and hard to diagnose after the fact
+        // (see: the `strings -e` flag rejection this logging caught).
+        if process.terminationStatus != 0 {
+            let err = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            print("⚙️ [IPASecurityScanner] \(launchPath) \(args.joined(separator: " ")) exited \(process.terminationStatus): \(err)")
+        }
         return data
     }
 
@@ -710,6 +967,49 @@ struct IPASecurityScanner {
     }
 }
 
+// MARK: - Manual search
+
+/// One hit from `SecurityScanResult.search` — a curated regex list can never
+/// anticipate everything a specific engagement is hunting for (an internal
+/// hostname, a suspected leaked term, an SDK's own config key), so this lets
+/// the analyst grep the same already-extracted text (every Mach-O binary's
+/// strings + every text/plist/config file) for anything, on demand.
+struct ManualSearchHit: Identifiable {
+    let id = UUID()
+    let location: String
+    let snippet: String
+}
+
+extension SecurityScanResult {
+
+    /// Case-insensitive plain-substring search (not regex — the point of
+    /// this box is "type the thing you're looking for", not another syntax
+    /// to learn). Capped at `maxResults` total hits so a common short query
+    /// against a large corpus can't produce an unbounded list.
+    func search(_ query: String, maxResults: Int = 300) -> [ManualSearchHit] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { return [] }
+
+        var hits: [ManualSearchHit] = []
+        let contextChars = 40
+        for entry in searchCorpus {
+            let text = entry.text
+            var searchStart = text.startIndex
+            while let range = text.range(of: trimmed, options: .caseInsensitive, range: searchStart..<text.endIndex) {
+                let snippetStart = text.index(range.lowerBound, offsetBy: -contextChars, limitedBy: text.startIndex) ?? text.startIndex
+                let snippetEnd = text.index(range.upperBound, offsetBy: contextChars, limitedBy: text.endIndex) ?? text.endIndex
+                var snippet = String(text[snippetStart..<snippetEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if snippetStart != text.startIndex { snippet = "…" + snippet }
+                if snippetEnd != text.endIndex { snippet += "…" }
+                hits.append(ManualSearchHit(location: entry.location, snippet: snippet))
+                if hits.count >= maxResults { return hits }
+                searchStart = range.upperBound
+            }
+        }
+        return hits
+    }
+}
+
 // MARK: - Report serialization
 
 extension SecurityScanResult {
@@ -724,6 +1024,9 @@ extension SecurityScanResult {
         out += "(Critical: \(count(of: .critical)), High: \(count(of: .high)), "
         out += "Medium: \(count(of: .medium)), Low: \(count(of: .low)), Info: \(count(of: .info)))\n\n"
         out += "> Findings are heuristic and may include false positives. Review each item before acting. Secret values are redacted.\n"
+        if hasPartiallyEncryptedBinaries {
+            out += "\n> ⚠️ Still FairPlay-encrypted: \(encryptedBinaries.joined(separator: ", ")). Results for these binaries are limited — dump a decrypted copy and re-scan for full coverage.\n"
+        }
 
         for severity in FindingSeverity.allCases.reversed() {
             let items = sortedFindings.filter { $0.severity == severity }
@@ -745,6 +1048,7 @@ extension SecurityScanResult {
             "app": appName,
             "date": df.string(from: date),
             "scannedFileCount": scannedFileCount,
+            "encryptedBinaries": encryptedBinaries,
             "summary": [
                 "critical": count(of: .critical),
                 "high": count(of: .high),

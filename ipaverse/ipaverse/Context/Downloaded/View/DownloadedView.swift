@@ -20,14 +20,16 @@ struct DownloadedView: View {
     @State private var errorMessage: String?
     @State private var selectedApp: AppStoreApp?
     @State private var installContext: IPAInstallContext?
-    @State private var appToScan: DownloadedApp?
     @State private var appToDump: DownloadedApp?
     @State private var isDropTargeted = false
     @State private var importError: String?
     @State private var importingCount = 0
     private var isImporting: Bool { importingCount > 0 }
-    /// Gates "Dump Decrypted Copy" — pulls FairPlay-decrypted bytes out of a
-    /// jailbroken device's live memory via Frida — behind Evil Mode.
+    /// Gates "Reverse Engineer" (live Frida instrumentation — network
+    /// interception, UI hierarchy inspection/highlighting, editable
+    /// NSUserDefaults values) and "Dump Decrypted Copy" (pulls
+    /// FairPlay-decrypted bytes out of a jailbroken device's live memory via
+    /// Frida) behind Evil Mode.
     @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     var body: some View {
@@ -94,10 +96,12 @@ struct DownloadedView: View {
                             }
 
                             Button {
-                                appToScan = downloadedApp
+                                openWindow(id: "securityScan", value: downloadedApp.id)
                             } label: {
-                                Label("Security Scan", systemImage: "shield.lefthalf.filled")
+                                Label("Reverse Engineer", systemImage: "binoculars.fill")
                             }
+                            .disabled(!isEvilMode)
+                            .help(isEvilMode ? "" : "Enable Evil Mode from the toolbar to use this.")
 
                             Button {
                                 appToDump = downloadedApp
@@ -164,9 +168,6 @@ struct DownloadedView: View {
                 appName: ctx.appName,
                 activeAppleID: loginViewModel.currentAccount?.email ?? account.email
             )
-        }
-        .sheet(item: $appToScan) { app in
-            SecurityScanView(ipaPath: app.filePath, appName: app.name)
         }
         .sheet(item: $appToDump) { app in
             DumpView(downloadedApp: app)

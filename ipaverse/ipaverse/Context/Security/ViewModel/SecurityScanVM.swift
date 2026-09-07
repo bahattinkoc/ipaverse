@@ -21,6 +21,14 @@ final class SecurityScanVM: ObservableObject {
 
     @Published var state: State = .idle
 
+    // MARK: - Manual search
+    @Published var searchQuery: String = "" {
+        didSet { scheduleSearch() }
+    }
+    @Published private(set) var searchHits: [ManualSearchHit] = []
+    @Published private(set) var isSearching = false
+    private var searchTask: Task<Void, Never>?
+
     let ipaPath: String
     let appName: String
 
@@ -45,6 +53,14 @@ final class SecurityScanVM: ObservableObject {
     }
 
     // MARK: - Scan
+
+    /// Used from `.onAppear` now that this VM is owned by `ReverseEngineerView`
+    /// and outlives tab switches — the view reappearing shouldn't re-trigger a
+    /// full scan if one already ran. Use `run()` directly for an explicit
+    /// re-scan request.
+    func runIfNeeded() {
+        if case .idle = state { run() }
+    }
 
     func run() {
         guard !isScanning else { return }
@@ -76,6 +92,31 @@ final class SecurityScanVM: ObservableObject {
                 Task { @MainActor in onProgress(step) }
             }
         }.value
+    }
+
+    // MARK: - Manual search
+
+    /// Debounced so fast typing doesn't re-run a full-corpus scan on every
+    /// keystroke — 250ms of quiet before actually searching.
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        let query = searchQuery
+        guard let result, query.trimmingCharacters(in: .whitespaces).count >= 2 else {
+            searchHits = []
+            isSearching = false
+            return
+        }
+        isSearching = true
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let hits = await Task.detached(priority: .userInitiated) {
+                result.search(query)
+            }.value
+            guard !Task.isCancelled else { return }
+            searchHits = hits
+            isSearching = false
+        }
     }
 
     // MARK: - Export

@@ -634,7 +634,7 @@ struct IPAResigner {
             print("⚙️ [IPAResigner] FairPlay: binary unreadable or too small — \(binaryURL.lastPathComponent)")
             return false
         }
-        let magic = data.withUnsafeBytes { $0.load(as: UInt32.self) }
+        guard let magic = data.safeUInt32(at: 0) else { return false }
         var offsets: [Int] = []
         let fatMagic: UInt32 = 0xCAFEBABE
         let fatMagicSwapped: UInt32 = 0xBEBAFECA
@@ -644,19 +644,13 @@ struct IPAResigner {
         let macho32Swapped: UInt32 = 0xCEFAEDFE
 
         if magic == fatMagic || magic == fatMagicSwapped {
-            let count = data.withUnsafeBytes { ptr -> UInt32 in
-                let v = ptr.load(fromByteOffset: 4, as: UInt32.self)
-                return magic == fatMagic ? v.byteSwapped : v
-            }
+            guard let rawCount = data.safeUInt32(at: 4) else { return false }
+            let count = magic == fatMagic ? rawCount.byteSwapped : rawCount
             print("⚙️ [IPAResigner] FairPlay: fat binary, \(count) slices")
             for i in 0..<Int(count) {
                 let base = 8 + i * 20
-                guard base + 8 <= data.count else { break }
-                let offset = data.withUnsafeBytes { ptr -> UInt32 in
-                    let v = ptr.load(fromByteOffset: base + 8, as: UInt32.self)
-                    return v.byteSwapped
-                }
-                offsets.append(Int(offset))
+                guard let rawOffset = data.safeUInt32(at: base + 8) else { break }
+                offsets.append(Int(rawOffset.byteSwapped))
             }
         } else if magic == macho64 || magic == macho64Swapped || magic == macho32 || magic == macho32Swapped {
             let arch = (magic == macho64 || magic == macho64Swapped) ? "arm64" : "arm32"
@@ -674,11 +668,10 @@ struct IPAResigner {
     }
 
     private static func checkEncryptionInMacho(data: Data, offset: Int) -> Bool {
-        guard offset + 16 <= data.count else { return false }
-        let magic = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) }
+        guard offset + 16 <= data.count, let magic = data.safeUInt32(at: offset) else { return false }
         let needsSwap = magic == 0xCFFAEDFE || magic == 0xCEFAEDFE
         func u32(at byteOffset: Int) -> UInt32 {
-            let v = data.withUnsafeBytes { $0.load(fromByteOffset: byteOffset, as: UInt32.self) }
+            guard let v = data.safeUInt32(at: byteOffset) else { return 0 }
             return needsSwap ? v.byteSwapped : v
         }
         let ncmds = Int(u32(at: offset + 16))
