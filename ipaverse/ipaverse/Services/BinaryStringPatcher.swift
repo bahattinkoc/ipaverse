@@ -66,14 +66,13 @@ struct BinaryStringPatcher {
 
         for bundleRoot in bundleRoots {
             var binaries: [URL] = []
-            let executableURL = bundleRoot.appendingPathComponent(bundleRoot.deletingPathExtension().lastPathComponent)
-            if fm.fileExists(atPath: executableURL.path) { binaries.append(executableURL) }
+            if let executableURL = executableURL(in: bundleRoot) { binaries.append(executableURL) }
 
             let frameworksDir = bundleRoot.appendingPathComponent("Frameworks")
             if let items = try? fm.contentsOfDirectory(at: frameworksDir, includingPropertiesForKeys: nil) {
                 for item in items {
                     if item.pathExtension == "framework" {
-                        binaries.append(item.appendingPathComponent(item.deletingPathExtension().lastPathComponent))
+                        if let executableURL = executableURL(in: item) { binaries.append(executableURL) }
                     } else if item.pathExtension == "dylib" {
                         binaries.append(item)
                     }
@@ -81,10 +80,36 @@ struct BinaryStringPatcher {
             }
 
             for binaryURL in binaries {
-                guard let count = try? patchOne(binaryURL: binaryURL, pairs: pairs), count > 0 else { continue }
+                let count = try patchOne(binaryURL: binaryURL, pairs: pairs)
+                guard count > 0 else { continue }
                 progress("Patched \(count) string(s) in \(binaryURL.lastPathComponent)")
             }
         }
+    }
+
+    /// Bundle directory names are not required to match CFBundleExecutable.
+    private static func executableURL(in bundleURL: URL) -> URL? {
+        let fm = FileManager.default
+        let plistCandidates = [
+            bundleURL.appendingPathComponent("Info.plist"),
+            bundleURL.appendingPathComponent("Resources/Info.plist")
+        ]
+        for plistURL in plistCandidates {
+            guard let data = try? Data(contentsOf: plistURL),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                  let name = plist["CFBundleExecutable"] as? String,
+                  isSafeExecutableName(name) else { continue }
+            let url = bundleURL.appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+
+        let fallback = bundleURL.appendingPathComponent(bundleURL.deletingPathExtension().lastPathComponent)
+        return fm.fileExists(atPath: fallback.path) ? fallback : nil
+    }
+
+    private static func isSafeExecutableName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." &&
+        !name.contains("/") && !name.contains("\\")
     }
 
     /// Returns the number of occurrences replaced (0 if the file couldn't be
@@ -111,7 +136,7 @@ struct BinaryStringPatcher {
         var totalCount = 0
 
         for (old, new) in pairs {
-            let needle = Data(old.lowercased().utf8)
+            let needle = asciiLowercased(Data(old.utf8))
             guard !needle.isEmpty else { continue }
             let newBytes = Data(new.utf8)
             let freed = needle.count - newBytes.count
@@ -132,7 +157,7 @@ struct BinaryStringPatcher {
             // or every "match" ends up patching essentially random bytes near
             // the start of the file (Mach-O header/load commands) instead of
             // the actual string.
-            let foldedRegion = Data(data[cstring].map { (0x41...0x5A).contains($0) ? $0 + 0x20 : $0 })
+            let foldedRegion = asciiLowercased(Data(data[cstring]))
 
             var matchStarts: [Int] = []
             var searchStart = foldedRegion.startIndex
@@ -142,7 +167,10 @@ struct BinaryStringPatcher {
             }
             guard !matchStarts.isEmpty else { continue }
 
-            for start in matchStarts {
+            // Work right-to-left. Patching an earlier substring carries the rest of
+            // its enclosing C string left, so left-to-right would make later offsets
+            // stale whenever the same literal contains more than one match.
+            for start in matchStarts.reversed() {
                 let matchEnd = start + needle.count
                 var stringEnd = matchEnd
                 while stringEnd < cstring.upperBound, data[stringEnd] != 0 { stringEnd += 1 }
@@ -169,6 +197,10 @@ struct BinaryStringPatcher {
     private static let machHeaderSize = 32
     private static let machMagic64: UInt32 = 0xFEED_FACF
     private static let lcSegment64: UInt32 = 0x19
+
+    private static func asciiLowercased(_ data: Data) -> Data {
+        Data(data.map { (0x41...0x5A).contains($0) ? $0 + 0x20 : $0 })
+    }
 
     /// File-offset range of the `__TEXT,__cstring` section in a thin 64-bit
     /// arm64 Mach-O, or nil if this isn't one / it has no such section (fat
@@ -198,9 +230,10 @@ struct BinaryStringPatcher {
                         guard sectionOffset + 80 <= data.count else { break }
                         let sectname = data.subdata(in: sectionOffset..<(sectionOffset + 16))
                         if segnameString(sectname) == "__cstring" {
-                            let size = Int(u32(sectionOffset + 40))
+                            guard let rawSize = data.safeUInt64(at: sectionOffset + 40),
+                                  let size = Int(exactly: rawSize) else { return nil }
                             let fileOffset = Int(u32(sectionOffset + 48))
-                            guard fileOffset >= 0, size >= 0, fileOffset + size <= data.count else { return nil }
+                            guard fileOffset <= data.count, size <= data.count - fileOffset else { return nil }
                             return fileOffset..<(fileOffset + size)
                         }
                     }

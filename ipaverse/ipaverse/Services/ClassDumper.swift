@@ -179,8 +179,9 @@ enum ClassDumper {
                     let sectname = data.safeFixedString(at: sectionOffset, length: 16) ?? ""
                     if segname == "__TEXT", sectname == "__objc_methname",
                        let size = data.safeUInt64(at: sectionOffset + 40),
-                       let fileoff = data.safeUInt32(at: sectionOffset + 48) {
-                        return splitNulSeparatedStrings(in: data, start: Int(fileoff), length: Int(size))
+                       let fileoff = data.safeUInt32(at: sectionOffset + 48),
+                       let length = Int(exactly: size) {
+                        return splitNulSeparatedStrings(in: data, start: Int(fileoff), length: length)
                     }
                     sectionOffset += 80
                 }
@@ -191,7 +192,7 @@ enum ClassDumper {
     }
 
     private static func splitNulSeparatedStrings(in data: Data, start: Int, length: Int) -> [String] {
-        guard start >= 0, length > 0, start + length <= data.count else { return [] }
+        guard start >= 0, length > 0, start <= data.count, length <= data.count - start else { return [] }
         let blob = data.subdata(in: start..<(start + length))
         var names = Set<String>()
         var current: [UInt8] = []

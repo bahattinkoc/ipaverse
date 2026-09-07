@@ -85,7 +85,7 @@ final class SecurityScanVM: ObservableObject {
     private static func scan(
         ipaPath: String,
         appName: String,
-        onProgress: @escaping @MainActor (String) -> Void
+        onProgress: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> SecurityScanResult {
         try await Task.detached(priority: .userInitiated) {
             try IPASecurityScanner.scan(ipaPath: ipaPath, appName: appName) { step in

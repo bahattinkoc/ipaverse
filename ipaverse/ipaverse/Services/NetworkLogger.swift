@@ -12,7 +12,7 @@ import Foundation
 /// Logging only ever runs in DEBUG builds, and sensitive fields (passwords, tokens, DSIDs,
 /// signatures, etc.) are redacted before printing so they never end up in Console.app,
 /// crash reports, or screen recordings even during development.
-final class NetworkLogger: NSObject {
+final class NetworkLogger: NSObject, @unchecked Sendable {
     static let shared = NetworkLogger()
 
     /// Key name fragments (lowercased, separators stripped) that mark a header/body field as
@@ -21,10 +21,11 @@ final class NetworkLogger: NSObject {
     private let sensitiveKeyPatterns: [String] = [
         "password", "token", "pet", "spd", "authcode", "securitycode",
         "dsid", "directoryservicesid", "actionsignature", "secret",
-        "identitytoken", "authorization"
+        "identitytoken", "authorization", "cookie", "setcookie", "xappleimd"
     ]
 
     private let redactedPlaceholder = "***REDACTED***"
+    private let formatterLock = NSLock()
 
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -44,13 +45,13 @@ final class NetworkLogger: NSObject {
             return
         }
 
-        let timestamp = dateFormatter.string(from: Date())
+        let timestamp = timestampString()
 
         var logData: [String: Any] = [
             "timestamp": timestamp,
             "type": "REQUEST",
             "method": method,
-            "url": url.absoluteString
+            "url": sanitizedURLString(url)
         ]
 
         // Headers
@@ -61,11 +62,9 @@ final class NetworkLogger: NSObject {
         // Query parameters
         if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
            let queryItems = components.queryItems, !queryItems.isEmpty {
-            var queryParams: [String: String] = [:]
-            for item in queryItems {
-                queryParams[item.name] = item.value ?? ""
-            }
-            logData["queryParameters"] = redactSensitiveValues(queryParams)
+            // Values are intentionally omitted: query strings commonly carry short-lived
+            // credentials under names a static deny-list cannot anticipate.
+            logData["queryParameterNames"] = Array(Set(queryItems.map(\.name))).sorted()
         }
 
         // Request body
@@ -85,12 +84,12 @@ final class NetworkLogger: NSObject {
             return
         }
 
-        let timestamp = dateFormatter.string(from: Date())
+        let timestamp = timestampString()
 
         var logData: [String: Any] = [
             "timestamp": timestamp,
             "type": "RESPONSE",
-            "url": url.absoluteString,
+            "url": sanitizedURLString(url),
             "statusCode": httpResponse.statusCode
         ]
 
@@ -127,6 +126,21 @@ final class NetworkLogger: NSObject {
     private func isSensitiveKey(_ key: String) -> Bool {
         let normalized = key.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
         return sensitiveKeyPatterns.contains { normalized.contains($0) }
+    }
+
+    private func sanitizedURLString(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return "<invalid URL>"
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? "<invalid URL>"
+    }
+
+    private func timestampString() -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return dateFormatter.string(from: Date())
     }
 
     /// Recursively walks a JSON/plist-shaped value (dictionaries, arrays, scalars) and replaces
@@ -208,8 +222,8 @@ final class NetworkLogger: NSObject {
                let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []) {
                 result["json"] = redactSensitiveValues(jsonObject)
             } else {
-                result["raw"] = data.base64EncodedString()
-                result["note"] = "Unknown content type, showing base64"
+                result["byteCount"] = data.count
+                result["note"] = "Unknown or binary body omitted"
             }
             return result
         }
@@ -218,21 +232,20 @@ final class NetworkLogger: NSObject {
             if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
                 result["json"] = redactSensitiveValues(json)
             } else {
-                let rawString = String(data: data, encoding: .utf8) ?? data.base64EncodedString()
-                result["raw"] = redactRawText(rawString)
+                result["raw"] = String(data: data, encoding: .utf8).map(redactRawText) ?? "<non-UTF8 body omitted>"
                 result["note"] = "Failed to parse as JSON"
             }
         } else if contentType.contains("application/x-www-form-urlencoded") {
             if let string = String(data: data, encoding: .utf8) {
                 result["formData"] = redactRawText(string)
             } else {
-                result["raw"] = data.base64EncodedString()
+                result["byteCount"] = data.count
             }
-        } else if contentType.contains("application/x-apple-plist") || contentType.contains("application/x-plist") {
+        } else if contentType.contains("plist") {
             if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) {
                 result["plist"] = redactSensitiveValues(plist)
             } else {
-                result["raw"] = data.base64EncodedString()
+                result["byteCount"] = data.count
                 result["note"] = "Failed to parse as PLIST"
             }
         } else if contentType.contains("text/") {
@@ -245,7 +258,7 @@ final class NetworkLogger: NSObject {
                     result["text"] = redactRawText(textString)
                 }
             } else {
-                result["raw"] = data.base64EncodedString()
+                result["byteCount"] = data.count
             }
         } else {
             // For unknown content types, try to parse as JSON if it's text
@@ -254,7 +267,7 @@ final class NetworkLogger: NSObject {
                let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []) {
                 result["json"] = redactSensitiveValues(jsonObject)
             } else {
-                result["raw"] = data.base64EncodedString()
+                result["byteCount"] = data.count
                 result["contentType"] = contentType
                 result["note"] = "Binary or unknown content type"
             }

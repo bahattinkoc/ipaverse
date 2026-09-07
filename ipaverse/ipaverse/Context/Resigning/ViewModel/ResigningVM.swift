@@ -67,6 +67,24 @@ struct PlistEntry: Identifiable, @unchecked Sendable {
 @MainActor
 final class ResigningVM: ObservableObject {
 
+    private enum EntitlementValue: Sendable {
+        case strings([String])
+        case present
+    }
+
+    private struct EntitlementSnapshot: Sendable {
+        var values: [String: EntitlementValue] = [:]
+        var isEmpty: Bool { values.isEmpty }
+    }
+
+    private struct PreparedLoad: Sendable {
+        let certificates: [ResignerCertificate]
+        let entries: [PlistEntry]
+        let tree: [IPAFileNode]
+        let entitlements: EntitlementSnapshot
+        let error: String?
+    }
+
     enum Tab { case properties, files }
 
     enum State: Equatable {
@@ -142,7 +160,7 @@ final class ResigningVM: ObservableObject {
     /// The original app's own signed entitlements, extracted once at load()
     /// from its still-untouched signature — the baseline for
     /// `entitlementWarnings`.
-    private var originalEntitlements: [String: Any] = [:]
+    private var originalEntitlements = EntitlementSnapshot()
     /// The bundle ID `identityReferences` was scanned for — captured at scan
     /// time so `applyIdentityMigration()` knows the exact old→new string map
     /// even if the user has since edited CFBundleIdentifier in Properties.
@@ -197,20 +215,36 @@ final class ResigningVM: ObservableObject {
         state = .loading
         let ipaPath = downloadedApp.filePath
 
-        let (certs, entries, tree, entitlements) = await Task.detached {
+        let prepared = await Task.detached { () -> PreparedLoad in
+            do {
+                try IPASecurityScanner.validateArchiveLimits(ipaPath: ipaPath)
+            } catch {
+                return PreparedLoad(
+                    certificates: [], entries: [], tree: [],
+                    entitlements: EntitlementSnapshot(), error: error.localizedDescription
+                )
+            }
             let certs = (try? IPAResigner.listCertificates()) ?? []
             let rawPlist = (try? IPAResigner.loadInfoPlist(ipaPath: ipaPath)) ?? [:]
             let entries = PlistEntry.entries(from: rawPlist)
             let tree = (try? IPAResigner.buildFileTree(ipaPath: ipaPath)) ?? []
             let entitlements = Self.extractOriginalEntitlements(ipaPath: ipaPath)
-            return (certs, entries, tree, entitlements)
+            return PreparedLoad(
+                certificates: certs, entries: entries, tree: tree,
+                entitlements: entitlements, error: nil
+            )
         }.value
 
-        certificates = certs
+        if let error = prepared.error {
+            state = .error(error)
+            return
+        }
+
+        certificates = prepared.certificates
         selectedCertificate = certificates.first(where: { $0.isDevelopment }) ?? certificates.first
-        plistEntries = entries
-        fileTree = tree
-        originalEntitlements = entitlements
+        plistEntries = prepared.entries
+        fileTree = prepared.tree
+        originalEntitlements = prepared.entitlements
         state = .idle
     }
 
@@ -218,23 +252,35 @@ final class ResigningVM: ObservableObject {
     /// executable by pulling just that one file out to a temp location —
     /// avoids a full IPA extraction just to answer "what did this app used to
     /// be allowed to do".
-    private nonisolated static func extractOriginalEntitlements(ipaPath: String) -> [String: Any] {
+    private nonisolated static func extractOriginalEntitlements(ipaPath: String) -> EntitlementSnapshot {
         guard let entries = try? IPAResigner.listEntries(ipaPath: ipaPath),
-              let appDirEntry = entries.first(where: {
-                  $0.hasSuffix(".app/") && $0.hasPrefix("Payload/") && $0.components(separatedBy: "/").count == 3
-              })
-        else { return [:] }
+              let infoEntry = entries.first(where: {
+                  $0.hasPrefix("Payload/") && $0.hasSuffix(".app/Info.plist") &&
+                  $0.components(separatedBy: "/").count == 3
+              }),
+              let infoData = try? IPAResigner.readEntry(ipaPath: ipaPath, entryName: infoEntry),
+              let plist = try? PropertyListSerialization.propertyList(from: infoData, options: [], format: nil) as? [String: Any],
+              let executable = plist["CFBundleExecutable"] as? String,
+              isSafeExecutableName(executable)
+        else { return EntitlementSnapshot() }
 
-        let appName = String(appDirEntry.dropFirst("Payload/".count).dropLast(".app/".count))
-        let binaryEntry = "Payload/\(appName).app/\(appName)"
+        let binaryEntry = String(infoEntry.dropLast("Info.plist".count)) + executable
         guard let data = try? IPAResigner.readEntry(ipaPath: ipaPath, entryName: binaryEntry), !data.isEmpty else {
-            return [:]
+            return EntitlementSnapshot()
         }
 
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        guard (try? data.write(to: tempURL)) != nil else { return [:] }
-        return IPAResigner.extractSignedEntitlements(fromBinaryAt: tempURL)
+        guard (try? data.write(to: tempURL)) != nil else { return EntitlementSnapshot() }
+        return entitlementSnapshot(
+            from: IPAResigner.extractSignedEntitlements(fromBinaryAt: tempURL),
+            omittingEmptyArrays: true
+        )
+    }
+
+    private nonisolated static func isSafeExecutableName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." &&
+        !name.contains("/") && !name.contains("\\")
     }
 
     // MARK: - Plist editing
@@ -329,7 +375,10 @@ final class ResigningVM: ObservableObject {
         let original = originalEntitlements
         let identityReplacements = appliedIdentityReplacements
         Task.detached { [weak self] in
-            let profileEntitlements = (try? IPAResigner.extractEntitlements(from: profileURL)) ?? [:]
+            let profileEntitlements = Self.entitlementSnapshot(
+                from: (try? IPAResigner.extractEntitlements(from: profileURL)) ?? [:],
+                omittingEmptyArrays: false
+            )
             let warnings = Self.diffEntitlements(original: original, profile: profileEntitlements, identityReplacements: identityReplacements)
             await self?.applyEntitlementWarnings(warnings, forProfile: profileURL)
         }
@@ -346,18 +395,17 @@ final class ResigningVM: ObservableObject {
     /// would keep "finding" the old group name missing from the new profile,
     /// which is expected and correct, not a real gap.
     private nonisolated static func diffEntitlements(
-        original: [String: Any], profile: [String: Any], identityReplacements: [String: String]
+        original: EntitlementSnapshot, profile: EntitlementSnapshot, identityReplacements: [String: String]
     ) -> [String] {
         var warnings: [String] = []
         for (key, label) in watchedEntitlements {
-            guard let originalValue = original[key] else { continue }
-            if let originalArray = originalValue as? [Any], originalArray.isEmpty { continue }
+            guard let originalValue = original.values[key] else { continue }
 
-            guard let profileValue = profile[key] else {
+            guard let profileValue = profile.values[key] else {
                 warnings.append("\(label) is in the original signature but missing entirely from the selected profile.")
                 continue
             }
-            if let originalArray = originalValue as? [String] {
+            if case .strings(let originalArray) = originalValue {
                 // Case-insensitive lookup: `identityReplacements`' keys carry
                 // CFBundleIdentifier's own casing (e.g. "com.turkcell.CSI"),
                 // but the actual entitlement value being remapped here comes
@@ -368,7 +416,8 @@ final class ResigningVM: ObservableObject {
                 let expectedArray = originalArray.map { value in
                     identityReplacements.first { $0.key.caseInsensitiveCompare(value) == .orderedSame }?.value ?? value
                 }
-                let profileArray = (profileValue as? [String]) ?? []
+                let profileArray: [String]
+                if case .strings(let values) = profileValue { profileArray = values } else { profileArray = [] }
                 if profileArray.isEmpty {
                     warnings.append("\(label) is an empty array in the profile — attach the resource to the App ID's capability and regenerate the profile.")
                 } else {
@@ -380,6 +429,23 @@ final class ResigningVM: ObservableObject {
             }
         }
         return warnings
+    }
+
+    private nonisolated static func entitlementSnapshot(
+        from entitlements: [String: Any], omittingEmptyArrays: Bool
+    ) -> EntitlementSnapshot {
+        var snapshot = EntitlementSnapshot()
+        for (key, _) in watchedEntitlements {
+            guard let value = entitlements[key] else { continue }
+            if let strings = value as? [String] {
+                if !strings.isEmpty || !omittingEmptyArrays { snapshot.values[key] = .strings(strings) }
+            } else if let array = value as? [Any], array.isEmpty, omittingEmptyArrays {
+                continue
+            } else {
+                snapshot.values[key] = .present
+            }
+        }
+        return snapshot
     }
 
     // MARK: - Identity migration (bundle ID / App Group)

@@ -99,7 +99,12 @@ struct FridaScriptDetailView: View {
                     .font(.caption)
                     .foregroundColor(.orange)
                     .lineLimit(2)
-            } else if viewModel.isRunning {
+            } else if viewModel.state == .attaching {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…").font(.caption).foregroundColor(.secondary)
+                }
+            } else if viewModel.isAttached {
                 HStack(spacing: 6) {
                     Circle().fill(Color.green).frame(width: 7, height: 7)
                     Text("Attached — live").font(.caption).foregroundColor(.secondary)

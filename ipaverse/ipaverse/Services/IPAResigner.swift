@@ -82,6 +82,9 @@ struct IPAFileNode: Identifiable, Sendable {
 enum IPAResignError: LocalizedError {
     case appBundleNotFound
     case infoPlistNotFound
+    case mainExecutableNotFound
+    case unsafeReplacementPath(String)
+    case archiveOutputTooLarge(String)
     case provisioningProfileRequired
     case certificateNotInProfile(certificateName: String, profileName: String)
     case fairPlayEncrypted
@@ -92,6 +95,9 @@ enum IPAResignError: LocalizedError {
         switch self {
         case .appBundleNotFound: "No .app bundle found inside Payload"
         case .infoPlistNotFound: "Info.plist not found"
+        case .mainExecutableNotFound: "CFBundleExecutable is missing, invalid, or does not exist in the app bundle"
+        case .unsafeReplacementPath(let path): "Unsafe replacement path in IPA: \(path)"
+        case .archiveOutputTooLarge(let item): "IPA data is too large to load safely: \(item)"
         case .provisioningProfileRequired: "A provisioning profile (.mobileprovision) is required to install on a device"
         case .certificateNotInProfile(let certName, let profileName):
             "\"\(certName)\" is not authorized by \"\(profileName)\" — the profile's DeveloperCertificates list doesn't include this certificate's private key. Pick a provisioning profile generated for this exact certificate (Apple Developer portal → Profiles), or select a different certificate whose team issued this profile."
@@ -106,6 +112,23 @@ enum IPAResignError: LocalizedError {
 // MARK: - IPAResigner
 
 struct IPAResigner {
+
+    private final class ProcessDataBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func store(_ value: Data) {
+            lock.lock()
+            data = value
+            lock.unlock()
+        }
+
+        func load() -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
+    }
 
     // MARK: - Static helpers
 
@@ -316,15 +339,26 @@ struct IPAResigner {
 
         // 1. Extract IPA
         progress("Opening IPA...")
+        try Self.validateArchiveForProcessing(ipaPath: ipaPath)
         try runProcess(executable: "/usr/bin/unzip", arguments: ["-q", ipaPath, "-d", workDir.path])
+        try Self.validateExtractedArchive(at: workDir)
 
         // 2. .app bundle'ı bul
         let appURL = try findAppBundle(in: workDir.appendingPathComponent("Payload"))
         let infoPlistURL = appURL.appendingPathComponent("Info.plist")
+        let initialPlist = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: infoPlistURL), options: [], format: nil
+        ) as? [String: Any]
 
         // 2.1 FairPlay encryption check — encrypted binaries cannot be re-signed
-        let appName = appURL.deletingPathExtension().lastPathComponent
-        let mainBinaryURL = appURL.appendingPathComponent(appName)
+        guard let executableName = initialPlist?["CFBundleExecutable"] as? String,
+              Self.isSafeExecutableName(executableName) else {
+            throw IPAResignError.mainExecutableNotFound
+        }
+        let mainBinaryURL = appURL.appendingPathComponent(executableName)
+        guard FileManager.default.fileExists(atPath: mainBinaryURL.path) else {
+            throw IPAResignError.mainExecutableNotFound
+        }
         print("⚙️ [IPAResigner] Checking FairPlay: \(mainBinaryURL.lastPathComponent)")
         if Self.isFairPlayEncrypted(binaryURL: mainBinaryURL) {
             print("⚙️ [IPAResigner] ❌ FairPlay encrypted (cryptid=1)")
@@ -338,9 +372,7 @@ struct IPAResigner {
         // 3. Apply Info.plist edits (+ Security Testing Mode ATS bypass)
         if !config.plistEdits.isEmpty || config.enableSecurityTestingMode {
             progress("Applying changes...")
-            var plist = (try? PropertyListSerialization.propertyList(
-                from: Data(contentsOf: infoPlistURL), options: [], format: nil
-            ) as? [String: Any]) ?? [:]
+            var plist = initialPlist ?? [:]
             let originalBundleID = plist["CFBundleIdentifier"] as? String ?? ""
             for (key, value) in config.plistEdits { plist[key] = value }
 
@@ -367,7 +399,7 @@ struct IPAResigner {
         if !config.fileReplacements.isEmpty {
             if config.plistEdits.isEmpty && !config.enableSecurityTestingMode { progress("Applying changes...") }
             for (relativePath, data) in config.fileReplacements {
-                let fileURL = workDir.appendingPathComponent(relativePath)
+                let fileURL = try safeReplacementURL(relativePath: relativePath, root: workDir)
                 try FileManager.default.createDirectory(
                     at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
                 )
@@ -468,6 +500,52 @@ struct IPAResigner {
 
     // MARK: - Private helpers
 
+    private static func isSafeExecutableName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." &&
+        !name.contains("/") && !name.contains("\\")
+    }
+
+    private static func validateArchiveForProcessing(ipaPath: String) throws {
+        do {
+            try IPASecurityScanner.validateArchiveLimits(ipaPath: ipaPath)
+        } catch {
+            throw IPAResignError.processFailure(executable: "IPA validation", stderr: error.localizedDescription)
+        }
+    }
+
+    private static func validateExtractedArchive(at root: URL) throws {
+        do {
+            try IPASecurityScanner.validateExtractedTree(at: root)
+        } catch {
+            throw IPAResignError.processFailure(executable: "IPA validation", stderr: error.localizedDescription)
+        }
+    }
+
+    private func safeReplacementURL(relativePath: String, root: URL) throws -> URL {
+        guard !relativePath.hasPrefix("/"), !relativePath.isEmpty else {
+            throw IPAResignError.unsafeReplacementPath(relativePath)
+        }
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw IPAResignError.unsafeReplacementPath(relativePath)
+        }
+
+        var candidate = root
+        for component in components {
+            candidate.appendPathComponent(component)
+            if FileManager.default.fileExists(atPath: candidate.path),
+               (try candidate.resourceValues(forKeys: [.isSymbolicLinkKey])).isSymbolicLink == true {
+                throw IPAResignError.unsafeReplacementPath(relativePath)
+            }
+        }
+
+        let canonicalRoot = root.standardizedFileURL.path + "/"
+        guard candidate.standardizedFileURL.path.hasPrefix(canonicalRoot) else {
+            throw IPAResignError.unsafeReplacementPath(relativePath)
+        }
+        return candidate
+    }
+
     @discardableResult
     private func runProcess(executable: String, workingDirectory: URL? = nil, arguments: [String]) throws -> String {
         let process = Process()
@@ -526,8 +604,8 @@ struct IPAResigner {
         let frameworksURL = appURL.appendingPathComponent("Frameworks")
         if let items = try? fm.contentsOfDirectory(at: frameworksURL, includingPropertiesForKeys: nil) {
             for item in items where item.pathExtension == "framework" || item.pathExtension == "dylib" {
-                let err = (try? runProcessCapturingError(executable: "/usr/bin/codesign",
-                                                         arguments: ["-f", "-s", certificate, item.path])) ?? ""
+                let err = try runProcessCapturingError(executable: "/usr/bin/codesign",
+                                                       arguments: ["-f", "-s", certificate, item.path])
                 print("⚙️ [IPAResigner] codesign \(item.lastPathComponent): \(err.isEmpty ? "OK" : err)")
             }
         }
@@ -540,8 +618,8 @@ struct IPAResigner {
                 let appexFW = appex.appendingPathComponent("Frameworks")
                 if let fwItems = try? fm.contentsOfDirectory(at: appexFW, includingPropertiesForKeys: nil) {
                     for item in fwItems where item.pathExtension == "framework" || item.pathExtension == "dylib" {
-                        let err = (try? runProcessCapturingError(executable: "/usr/bin/codesign",
-                                                                  arguments: ["-f", "-s", certificate, item.path])) ?? ""
+                        let err = try runProcessCapturingError(executable: "/usr/bin/codesign",
+                                                              arguments: ["-f", "-s", certificate, item.path])
                         print("⚙️ [IPAResigner] codesign \(item.lastPathComponent): \(err.isEmpty ? "OK" : err)")
                     }
                 }
@@ -826,34 +904,68 @@ struct IPAResigner {
     // MARK: - Static zip helpers (unzip -Z1 pattern)
 
     static func listEntries(ipaPath: String) throws -> [String] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-Z1", ipaPath]
-        process.useUTF8Locale()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        try process.run()
-        let output = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let data = try captureUnzip(
+            arguments: ["-Z1", ipaPath],
+            maxOutputBytes: 64 * 1_024 * 1_024,
+            itemDescription: "archive file list"
+        )
+        let output = String(data: data, encoding: .utf8) ?? ""
         return output.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
     static func readEntry(ipaPath: String, entryName: String) throws -> Data {
+        try captureUnzip(
+            arguments: ["-p", ipaPath, entryName],
+            maxOutputBytes: 512 * 1_024 * 1_024,
+            itemDescription: entryName
+        )
+    }
+
+    private static func captureUnzip(
+        arguments: [String], maxOutputBytes: Int, itemDescription: String
+    ) throws -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-p", ipaPath, entryName]
+        process.arguments = arguments
         process.useUTF8Locale()
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
         try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+        let errorBox = ProcessDataBox()
+        let errorDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            errorBox.store(errPipe.fileHandleForReading.readDataToEndOfFile())
+            errorDone.signal()
+        }
+
+        var data = Data()
+        var exceededLimit = false
+        while true {
+            let chunk = outPipe.fileHandleForReading.readData(ofLength: 1_048_576)
+            if chunk.isEmpty { break }
+            if chunk.count > maxOutputBytes - data.count {
+                exceededLimit = true
+                if process.isRunning { process.terminate() }
+                _ = outPipe.fileHandleForReading.readDataToEndOfFile()
+                break
+            }
+            data.append(chunk)
+        }
         process.waitUntilExit()
+        errorDone.wait()
+        if exceededLimit {
+            throw IPAResignError.archiveOutputTooLarge(itemDescription)
+        }
+        guard process.terminationStatus == 0 else {
+            let stderr = String(data: errorBox.load(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw IPAResignError.processFailure(executable: "/usr/bin/unzip", stderr: stderr)
+        }
         return data
     }
 

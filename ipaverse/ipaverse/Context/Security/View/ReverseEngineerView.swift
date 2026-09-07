@@ -23,6 +23,7 @@ import SwiftUI
 struct ReverseEngineerView: View {
     let ipaPath: String
     let appName: String
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
 
     private enum SidebarItem: Hashable {
         case staticAnalysis
@@ -55,6 +56,12 @@ struct ReverseEngineerView: View {
                 Divider()
                 detail
             }
+        }
+        .onChange(of: isEvilMode) { _, enabled in
+            if !enabled { fridaToolkitVM.stop() }
+        }
+        .onDisappear {
+            fridaToolkitVM.stop()
         }
     }
 

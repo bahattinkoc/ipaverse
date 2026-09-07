@@ -169,6 +169,7 @@ struct NetworkExchange: Identifiable {
 final class FridaToolkitVM: ObservableObject {
     enum State: Equatable {
         case idle
+        case attaching
         case running
         case failed(String)
     }
@@ -217,6 +218,10 @@ final class FridaToolkitVM: ObservableObject {
     @Published private(set) var dumpEntries: [DumpEntry] = []
 
     private var handle: FridaScriptHandle?
+    private var attachTask: Task<Void, Never>?
+    /// Invalidates callbacks/results from an attach that was stopped while its
+    /// synchronous Frida setup was still executing on a background thread.
+    private var sessionGeneration = 0
     /// sandbox-files only — keyed by the request's own UUID so a `file-
     /// content` reply (handled in `handleDumpMessage`) reaches the right
     /// caller. Requires the script to still be attached — reading a file
@@ -231,7 +236,13 @@ final class FridaToolkitVM: ObservableObject {
         self.processName = appName
     }
 
-    var isRunning: Bool { state == .running }
+    /// True while attaching too, so the UI exposes Stop and prevents a second attach.
+    var isRunning: Bool { state == .attaching || state == .running }
+    var isAttached: Bool { state == .running }
+
+    private var evilModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "evilModeEnabled")
+    }
 
     var selectedScript: FridaScript {
         FridaScriptLibrary.scripts.first { $0.id == selectedScriptID } ?? FridaScriptLibrary.scripts[0]
@@ -239,6 +250,10 @@ final class FridaToolkitVM: ObservableObject {
 
     func run() {
         guard !isRunning else { return }
+        guard evilModeEnabled else {
+            state = .failed("Enable Evil Mode before starting a live Frida session.")
+            return
+        }
         let script = selectedScript
         let trimmedClass = className.trimmingCharacters(in: .whitespaces)
         if script.requiresClassName && trimmedClass.isEmpty {
@@ -255,7 +270,9 @@ final class FridaToolkitVM: ObservableObject {
         networkExchanges.removeAll()
         uiHierarchyWindows.removeAll()
         dumpEntries.removeAll()
-        state = .running
+        sessionGeneration += 1
+        let generation = sessionGeneration
+        state = .attaching
         let isNetworkLogger = script.id == Self.networkLoggerScriptID
         let isUIHierarchy = script.id == Self.uiHierarchyScriptID
         let isDataDump = script.category == .dump
@@ -264,13 +281,15 @@ final class FridaToolkitVM: ObservableObject {
             methodFilter: methodFilter.trimmingCharacters(in: .whitespaces)
         )
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        attachTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 let handle = try FridaScriptRunner.attachAndRun(
                     processName: trimmedProcess,
                     scriptSource: source,
                     onMessage: { raw in
                         Task { @MainActor in
+                            guard self?.sessionGeneration == generation,
+                                  self?.evilModeEnabled == true else { return }
                             if isNetworkLogger {
                                 self?.handleNetworkMessage(raw)
                             } else if isUIHierarchy {
@@ -283,16 +302,29 @@ final class FridaToolkitVM: ObservableObject {
                         }
                     },
                     progress: { line in
-                        Task { @MainActor in self?.append("· " + line) }
+                        Task { @MainActor in
+                            guard self?.sessionGeneration == generation else { return }
+                            self?.append("· " + line)
+                        }
                     }
                 )
-                await MainActor.run {
-                    self?.handle = handle
-                    if isNetworkLogger { self?.postInterceptState() }
+                let accepted = await MainActor.run { [weak self] in
+                    guard let self,
+                          self.sessionGeneration == generation,
+                          self.evilModeEnabled,
+                          self.state == .attaching else { return false }
+                    self.handle = handle
+                    self.state = .running
+                    self.attachTask = nil
+                    if isNetworkLogger { self.postInterceptState() }
+                    return true
                 }
+                if !accepted { handle.stop() }
             } catch {
-                await MainActor.run {
-                    self?.state = .failed(error.localizedDescription)
+                await MainActor.run { [weak self] in
+                    guard let self, self.sessionGeneration == generation else { return }
+                    self.attachTask = nil
+                    self.state = .failed(error.localizedDescription)
                 }
             }
         }
@@ -306,9 +338,14 @@ final class FridaToolkitVM: ObservableObject {
     /// doesn't pass this — someone who just hit Stop almost always wants to
     /// review what they captured, not have it vanish immediately.
     func stop(clearingData: Bool = false) {
+        let wasActive = isRunning
+        sessionGeneration += 1
+        attachTask?.cancel()
+        attachTask = nil
+        forwardPendingNetworkExchanges()
         handle?.stop()
         handle = nil
-        if state == .running {
+        if wasActive {
             append("— stopped —")
         }
         state = .idle
@@ -339,6 +376,7 @@ final class FridaToolkitVM: ObservableObject {
     // MARK: - Network logger
 
     private func postInterceptState() {
+        guard evilModeEnabled else { return }
         post(["type": "set-intercept", "enabled": interceptEnabled, "filter": interceptFilter])
     }
 
@@ -347,6 +385,7 @@ final class FridaToolkitVM: ObservableObject {
     /// optimistically; the script doesn't ack this beyond the
     /// `request-sent`/`dropped` message `handleNetworkMessage` also applies.
     func resolvePendingRequest(_ exchange: NetworkExchange, drop: Bool) {
+        guard evilModeEnabled else { return }
         guard networkExchanges.contains(where: { $0.id == exchange.id }) else { return }
         var payload: [String: Any] = ["type": "resume-req-\(exchange.id)", "action": drop ? "drop" : "forward"]
         if !drop {
@@ -367,6 +406,7 @@ final class FridaToolkitVM: ObservableObject {
     /// overload — see the script's README entry for why the other overload
     /// can't offer this.
     func resolvePendingResponse(_ exchange: NetworkExchange, drop: Bool) {
+        guard evilModeEnabled else { return }
         guard let idx = networkExchanges.firstIndex(where: { $0.id == exchange.id }) else { return }
         var payload: [String: Any] = ["type": "resume-resp-\(exchange.id)", "action": drop ? "drop" : "forward"]
         if !drop {
@@ -382,6 +422,35 @@ final class FridaToolkitVM: ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
         handle?.post(json)
+    }
+
+    /// A stopped intercept must not leave target-app threads blocked in Frida's
+    /// `recv().wait()`. Resume held exchanges with their current values before unload.
+    private func forwardPendingNetworkExchanges() {
+        for index in networkExchanges.indices {
+            let exchange = networkExchanges[index]
+            switch exchange.state {
+            case .pendingRequest:
+                var payload: [String: Any] = [
+                    "type": "resume-req-\(exchange.id)", "action": "forward",
+                    "method": exchange.method, "url": exchange.url, "headers": exchange.headers
+                ]
+                if let body = exchange.body { payload["body"] = body }
+                post(payload)
+                networkExchanges[index].state = .sent
+            case .pendingResponse:
+                var payload: [String: Any] = [
+                    "type": "resume-resp-\(exchange.id)", "action": "forward",
+                    "headers": exchange.responseHeaders
+                ]
+                if let status = exchange.status { payload["status"] = String(status) }
+                if let body = exchange.responseBody { payload["body"] = body }
+                post(payload)
+                networkExchanges[index].state = .completed
+            default:
+                break
+            }
+        }
     }
 
     private func handleNetworkMessage(_ raw: String) {
@@ -514,7 +583,7 @@ final class FridaToolkitVM: ObservableObject {
     /// this exact request/response shape) before shipping — see the
     /// script's own README entry.
     func downloadSandboxFile(path: String, completion: @escaping (Result<Data, DumpFileError>) -> Void) {
-        guard isRunning else {
+        guard evilModeEnabled, isAttached else {
             completion(.failure(DumpFileError(message: "The script isn't running anymore — re-run the dump first.")))
             return
         }
@@ -534,7 +603,7 @@ final class FridaToolkitVM: ObservableObject {
     /// `__NSCFNumber`, not degraded to a string) — see the script's own
     /// README entry. Only reachable while the script is still attached.
     func updateUserDefault(key: String, valueType: String, newValue: String, completion: @escaping (Result<Void, DumpFileError>) -> Void) {
-        guard isRunning else {
+        guard evilModeEnabled, isAttached else {
             completion(.failure(DumpFileError(message: "The script isn't running anymore — re-run the dump first.")))
             return
         }
@@ -605,6 +674,7 @@ final class FridaToolkitVM: ObservableObject {
     /// been deallocated, but there's no way to guarantee that in general —
     /// see the script's own header comment.
     func highlightView(_ viewId: String) {
+        guard evilModeEnabled, isAttached else { return }
         post(["type": "highlight-view", "viewId": viewId])
     }
 

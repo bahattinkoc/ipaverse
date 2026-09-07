@@ -21,6 +21,7 @@ struct SecurityScanWindowView: View {
     let appID: String?
 
     @Environment(\.modelContext) private var modelContext
+    @AppStorage("evilModeEnabled") private var isEvilMode = false
     @State private var resolvedApp: DownloadedApp?
     @State private var droppedIPA: (path: String, name: String)?
     @State private var isDropTargeted = false
@@ -29,7 +30,9 @@ struct SecurityScanWindowView: View {
 
     var body: some View {
         Group {
-            if let app = resolvedApp {
+            if !isEvilMode {
+                lockedScreen
+            } else if let app = resolvedApp {
                 ReverseEngineerView(ipaPath: app.filePath, appName: app.name)
             } else if let dropped = droppedIPA {
                 ReverseEngineerView(ipaPath: dropped.path, appName: dropped.name)
@@ -45,6 +48,20 @@ struct SecurityScanWindowView: View {
                 showPicker = false
             }
         }
+    }
+
+    private var lockedScreen: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "flame.slash")
+                .font(.system(size: 42))
+                .foregroundColor(.secondary)
+            Text("Evil Mode Required")
+                .font(.title2.weight(.semibold))
+            Text("Enable Evil Mode in the main window before using reverse-engineering tools.")
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(40)
     }
 
     // MARK: - Entry screen (no app loaded yet)

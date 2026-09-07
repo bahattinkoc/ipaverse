@@ -30,6 +30,17 @@ enum IPAImportError: LocalizedError {
 /// edited, re-signed, and installed exactly like a store-downloaded app.
 struct IPAImporter {
 
+    private struct PreparedImport: Sendable {
+        let app: AppStoreApp
+        let date: Date
+        let filePath: String
+        let iconURL: String?
+
+        var identity: String {
+            "\(app.id ?? 0)_\(app.bundleID ?? "")_\(app.version ?? "")"
+        }
+    }
+
     /// Reads the IPA's Info.plist and builds an `AppStoreApp` describing it.
     /// Imported IPAs are not tied to an App Store record, so `id`/`price` are 0 and
     /// `iconURL` is nil.
@@ -76,29 +87,36 @@ struct IPAImporter {
     @discardableResult
     @MainActor
     static func importIPA(at ipaURL: URL, into context: ModelContext) async throws -> DownloadedApp {
-        let imported = try await Task.detached(priority: .userInitiated) { () -> DownloadedApp in
+        let prepared = try await Task.detached(priority: .userInitiated) { () -> PreparedImport in
+            try IPASecurityScanner.validateArchiveLimits(ipaPath: ipaURL.path)
             let app = try metadata(for: ipaURL)
             // Prefer the app's build date (from the IPA) over "now" for imported apps.
             let date = IPAResigner.appBuildDate(ipaPath: ipaURL.path) ?? Date()
-            let prepared = DownloadedApp(app: app, downloadDate: date, filePath: ipaURL.path)
             // Extract the embedded app icon to a local cache so the row shows it.
             // Best-effort: a missing icon must not fail the import.
-            prepared.iconURL = cacheIcon(for: prepared.id, ipaURL: ipaURL)
-            return prepared
+            let identity = "\(app.id ?? 0)_\(app.bundleID ?? "")_\(app.version ?? "")"
+            return PreparedImport(
+                app: app,
+                date: date,
+                filePath: ipaURL.path,
+                iconURL: cacheIcon(for: identity, ipaURL: ipaURL)
+            )
         }.value
 
-        let identity = imported.id
+        let identity = prepared.identity
         let descriptor = FetchDescriptor<DownloadedApp>(
             predicate: #Predicate<DownloadedApp> { $0.id == identity }
         )
 
         let result: DownloadedApp
         if let existing = try context.fetch(descriptor).first {
-            existing.filePath = imported.filePath
-            existing.downloadDate = imported.downloadDate
-            if let iconURLString = imported.iconURL { existing.iconURL = iconURLString }
+            existing.filePath = prepared.filePath
+            existing.downloadDate = prepared.date
+            if let iconURLString = prepared.iconURL { existing.iconURL = iconURLString }
             result = existing
         } else {
+            let imported = DownloadedApp(app: prepared.app, downloadDate: prepared.date, filePath: prepared.filePath)
+            imported.iconURL = prepared.iconURL
             context.insert(imported)
             result = imported
         }
@@ -112,14 +130,19 @@ struct IPAImporter {
     /// approach as `ResigningVM`'s entitlement check) instead of extracting
     /// the whole IPA. Returns `false` (don't tag) if this can't be determined.
     static func isDecrypted(ipaURL: URL) -> Bool {
-        guard let entries = try? IPAResigner.listEntries(ipaPath: ipaURL.path),
-              let appDirEntry = entries.first(where: {
-                  $0.hasSuffix(".app/") && $0.hasPrefix("Payload/") && $0.components(separatedBy: "/").count == 3
-              })
+        guard (try? IPASecurityScanner.validateArchiveLimits(ipaPath: ipaURL.path)) != nil,
+              let entries = try? IPAResigner.listEntries(ipaPath: ipaURL.path),
+              let infoEntry = entries.first(where: {
+                  $0.hasPrefix("Payload/") && $0.hasSuffix(".app/Info.plist") &&
+                  $0.components(separatedBy: "/").count == 3
+              }),
+              let plistData = try? IPAResigner.readEntry(ipaPath: ipaURL.path, entryName: infoEntry),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any],
+              let executable = plist["CFBundleExecutable"] as? String,
+              isSafeExecutableName(executable)
         else { return false }
 
-        let appName = String(appDirEntry.dropFirst("Payload/".count).dropLast(".app/".count))
-        let binaryEntry = "Payload/\(appName).app/\(appName)"
+        let binaryEntry = String(infoEntry.dropLast("Info.plist".count)) + executable
         guard let data = try? IPAResigner.readEntry(ipaPath: ipaURL.path, entryName: binaryEntry), !data.isEmpty else {
             return false
         }
@@ -128,6 +151,11 @@ struct IPAImporter {
         defer { try? FileManager.default.removeItem(at: tempURL) }
         guard (try? data.write(to: tempURL)) != nil else { return false }
         return !IPAResigner.isFairPlayEncrypted(binaryURL: tempURL)
+    }
+
+    private static func isSafeExecutableName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." &&
+        !name.contains("/") && !name.contains("\\")
     }
 
     // MARK: - Icon cache

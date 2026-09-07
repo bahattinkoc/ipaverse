@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-enum AppPlatform: String, CaseIterable, Codable {
+enum AppPlatform: String, CaseIterable, Codable, Sendable {
     case ios = "iOS"
     case ipados = "iPadOS"
     case macos = "macOS"
@@ -26,7 +26,7 @@ enum AppPlatform: String, CaseIterable, Codable {
     }
 }
 
-struct AppStoreApp: Codable, Identifiable, Equatable {
+struct AppStoreApp: Codable, Identifiable, Equatable, Sendable {
     let id: Int64?
     let bundleID: String?
     let name: String?

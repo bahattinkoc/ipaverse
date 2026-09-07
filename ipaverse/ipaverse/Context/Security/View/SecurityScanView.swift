@@ -50,7 +50,7 @@ struct SecurityScanView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(maxWidth: 320)
+                .fixedSize()
             }
             Spacer()
             if case .done = viewModel.state {

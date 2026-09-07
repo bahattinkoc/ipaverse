@@ -27,6 +27,7 @@ enum FridaScriptRunnerError: LocalizedError {
     case deviceManagerFailed(String)
     case noUSBDeviceFound
     case appNotRunning(String)
+    case ambiguousProcess(String, [String])
     case attachFailed(String)
     case scriptFailed(String)
 
@@ -35,6 +36,7 @@ enum FridaScriptRunnerError: LocalizedError {
         case .deviceManagerFailed(let msg): "Couldn't talk to Frida: \(msg)"
         case .noUSBDeviceFound: "No USB device found. Connect the device and make sure frida-server is running (or the app has a Gadget injected)."
         case .appNotRunning(let name): "\"\(name)\" doesn't seem to be running on the device. Open it first, then try again."
+        case .ambiguousProcess(let name, let matches): "More than one running process matches \"\(name)\": \(matches.joined(separator: ", ")). Enter the exact process name."
         case .attachFailed(let msg): "Failed to attach: \(msg)"
         case .scriptFailed(let msg): "Script failed: \(msg)"
         }
@@ -125,7 +127,7 @@ private struct FridaScriptAPI {
 /// message callback's context. Runs entirely on a background thread (Frida's
 /// own GLib main loop needs a thread that stays alive and pumping); `stop()`
 /// unloads the script, detaches, and tears everything down.
-final class FridaScriptHandle {
+final class FridaScriptHandle: @unchecked Sendable {
     fileprivate var api: FridaScriptAPI!
     fileprivate var manager: OpaquePointer?
     fileprivate var device: OpaquePointer?
@@ -239,18 +241,27 @@ enum FridaScriptRunner {
         }
         defer { api.unref(processes) }
 
-        var targetPID: guint?
+        var exactMatches: [(name: String, pid: guint)] = []
+        var partialMatches: [(name: String, pid: guint)] = []
         let processCount = api.processListSize(processes)
         for i in 0..<processCount {
             let process = api.processListGet(processes, i)
             defer { api.unref(process) }
             guard let namePtr = api.processGetName(process) else { continue }
-            if String(cString: namePtr).localizedCaseInsensitiveContains(processName) {
-                targetPID = api.processGetPid(process)
-                break
+            let name = String(cString: namePtr)
+            let candidate = (name: name, pid: api.processGetPid(process))
+            if name.caseInsensitiveCompare(processName) == .orderedSame {
+                exactMatches.append(candidate)
+            } else if name.range(of: processName, options: [.caseInsensitive, .literal]) != nil {
+                partialMatches.append(candidate)
             }
         }
-        guard let pid = targetPID else { throw FridaScriptRunnerError.appNotRunning(processName) }
+        let matches = exactMatches.isEmpty ? partialMatches : exactMatches
+        guard !matches.isEmpty else { throw FridaScriptRunnerError.appNotRunning(processName) }
+        guard matches.count == 1 else {
+            throw FridaScriptRunnerError.ambiguousProcess(processName, matches.map(\.name).sorted())
+        }
+        let pid = matches[0].pid
 
         progress("Attaching...")
         let session = api.deviceAttachSync(device, pid, nil, nil, &error)

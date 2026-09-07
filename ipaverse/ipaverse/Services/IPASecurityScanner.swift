@@ -19,7 +19,7 @@ import Foundation
 
 // MARK: - Models
 
-enum FindingSeverity: Int, Comparable, CaseIterable {
+enum FindingSeverity: Int, Comparable, CaseIterable, Sendable {
     case info = 0, low, medium, high, critical
 
     static func < (lhs: FindingSeverity, rhs: FindingSeverity) -> Bool {
@@ -37,7 +37,7 @@ enum FindingSeverity: Int, Comparable, CaseIterable {
     }
 }
 
-struct SecurityFinding: Identifiable {
+struct SecurityFinding: Identifiable, Sendable {
     let id = UUID()
     let severity: FindingSeverity
     let category: String   // "Provisioning", "Info.plist", "Secret", "Embedded File", "Binary", "Network"
@@ -52,12 +52,12 @@ struct SecurityFinding: Identifiable {
 /// disk — the extraction tmpDir is removed as soon as `scan()` returns) so
 /// the manual search box can grep across everything the automatic scan
 /// already read, without re-extracting the IPA.
-struct SearchCorpusEntry {
+struct SearchCorpusEntry: Sendable {
     let location: String
     let text: String
 }
 
-struct SecurityScanResult {
+struct SecurityScanResult: Sendable {
     let appName: String
     let findings: [SecurityFinding]
     let scannedFileCount: Int
@@ -95,11 +95,15 @@ struct SecurityScanResult {
 enum SecurityScanError: LocalizedError {
     case extractionFailed(String)
     case appBundleNotFound
+    case resourceLimitExceeded(String)
+    case unsafeArchive(String)
 
     var errorDescription: String? {
         switch self {
         case .extractionFailed(let m): return "Could not extract the IPA: \(m)"
         case .appBundleNotFound:       return "No .app bundle found inside the IPA (is this a valid IPA?)."
+        case .resourceLimitExceeded(let m): return "The IPA exceeds safe processing limits: \(m)"
+        case .unsafeArchive(let m): return "The IPA is unsafe to process: \(m)"
         }
     }
 }
@@ -109,6 +113,8 @@ enum SecurityScanError: LocalizedError {
 /// Collects findings (deduplicated) and network endpoints across all passes so
 /// endpoint findings can be emitted once, aggregated, at the end.
 private final class ScanAccumulator {
+    private static let maxSearchCorpusBytes = 64 * 1_024 * 1_024
+
     var findings: [SecurityFinding] = []
     private var seen = Set<String>()
 
@@ -119,16 +125,51 @@ private final class ScanAccumulator {
     var internalHosts = Set<String>()
     var encryptedBinaryPaths = Set<String>()
     var searchCorpus: [SearchCorpusEntry] = []
+    private var searchCorpusBytes = 0
 
     func add(_ f: SecurityFinding) {
         let key = "\(f.severity.rawValue)|\(f.category)|\(f.title)|\(f.location ?? "")|\(f.snippet ?? "")"
         if seen.insert(key).inserted { findings.append(f) }
+    }
+
+    func addToSearchCorpus(location: String, text: String) {
+        let remaining = Self.maxSearchCorpusBytes - searchCorpusBytes
+        guard remaining > 0 else { return }
+        let utf8 = text.utf8
+        let retained = utf8.count <= remaining
+            ? text
+            : String(decoding: utf8.prefix(remaining), as: UTF8.self)
+        searchCorpus.append(SearchCorpusEntry(location: location, text: retained))
+        searchCorpusBytes += retained.utf8.count
     }
 }
 
 // MARK: - Scanner
 
 struct IPASecurityScanner {
+
+    private final class LockedDataBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func store(_ value: Data) {
+            lock.lock()
+            data = value
+            lock.unlock()
+        }
+
+        func load() -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
+    }
+
+    private static let maxArchiveBytes: UInt64 = 8 * 1_024 * 1_024 * 1_024
+    private static let maxUncompressedBytes: UInt64 = 8 * 1_024 * 1_024 * 1_024
+    private static let maxArchiveEntries: UInt64 = 100_000
+    private static let maxSuspiciousCompressionRatio = 500.0
+    private static let maxBinaryStringScanBytes = 512 * 1_024 * 1_024
 
     static func scan(
         ipaPath: String,
@@ -141,7 +182,9 @@ struct IPASecurityScanner {
         defer { try? fm.removeItem(at: tmpDir) }
 
         progress("Extracting IPA…")
+        try validateArchiveLimits(ipaPath: ipaPath)
         try extract(ipaPath: ipaPath, to: tmpDir)
+        try validateExtractedTree(at: tmpDir)
 
         let payloadURL = tmpDir.appendingPathComponent("Payload", isDirectory: true)
         guard let appURL = (try? fm.contentsOfDirectory(at: payloadURL, includingPropertiesForKeys: nil))?
@@ -181,7 +224,7 @@ struct IPASecurityScanner {
 
                 if isTextLike(url: url, size: size), let text = readText(at: url) {
                     scanText(text, location: rel, source: "file", into: acc)
-                    acc.searchCorpus.append(SearchCorpusEntry(location: rel, text: text))
+                    acc.addToSearchCorpus(location: rel, text: text)
                 }
             }
         }
@@ -576,22 +619,31 @@ struct IPASecurityScanner {
         // every binary-string-derived finding — secrets, endpoints, and the
         // anti-analysis/pinning markers below — without any visible error.
         var asciiText: String?
-        let primary = runProcess("/usr/bin/strings", ["-a", "-n", "6", url.path])
-        if let out = String(data: primary, encoding: .utf8) ?? String(data: primary, encoding: .isoLatin1),
-           !out.isEmpty {
-            scanText(out, location: location, source: "binary", into: acc)
-            acc.searchCorpus.append(SearchCorpusEntry(location: location, text: out))
-            asciiText = out
-        }
+        let binarySize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if !encrypted, binarySize <= maxBinaryStringScanBytes {
+            let primary = runProcess("/usr/bin/strings", ["-a", "-n", "6", url.path])
+            if let out = String(data: primary, encoding: .utf8) ?? String(data: primary, encoding: .isoLatin1),
+               !out.isEmpty {
+                scanText(out, location: location, source: "binary", into: acc)
+                acc.addToSearchCorpus(location: location, text: out)
+                asciiText = out
+            }
 
-        // Best-effort 16-bit (UTF-16LE) pass — some strings only live in this
-        // form. Kept behind `-e`, so on a toolchain that rejects the flag it
-        // just yields empty output and is silently skipped; the primary pass
-        // above no longer depends on it succeeding.
-        let wide = runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", "l", url.path])
-        if let out = String(data: wide, encoding: .utf8) ?? String(data: wide, encoding: .isoLatin1),
-           !out.isEmpty {
-            scanText(out, location: location, source: "binary", into: acc)
+            // Best-effort 16-bit (UTF-16LE) pass — some strings only live in this form.
+            let wide = runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", "l", url.path])
+            if let out = String(data: wide, encoding: .utf8) ?? String(data: wide, encoding: .isoLatin1),
+               !out.isEmpty {
+                scanText(out, location: location, source: "binary", into: acc)
+            }
+        } else if !encrypted {
+            acc.add(SecurityFinding(
+                severity: .info,
+                category: "Binary",
+                title: "String scan skipped for unusually large binary",
+                detail: "The binary is larger than the 512 MiB in-memory string-analysis limit. Imported-symbol analysis still ran.",
+                location: location,
+                snippet: nil
+            ))
         }
 
         // Imported-symbol pass: the symbol table lives in __LINKEDIT, which
@@ -842,6 +894,81 @@ struct IPASecurityScanner {
 
     // MARK: - Process / IO helpers
 
+    /// Reject obviously abusive archives before `ditto` materializes them on disk.
+    /// The high ratio check only applies above 512 MiB, allowing tiny, highly
+    /// compressible resources while still catching classic repeated-byte zip bombs.
+    static func validateArchiveLimits(ipaPath: String) throws {
+        let fileURL = URL(fileURLWithPath: ipaPath)
+        if let size = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           UInt64(size) > maxArchiveBytes {
+            throw SecurityScanError.resourceLimitExceeded("archive is larger than 8 GiB")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
+        process.arguments = ["-t", ipaPath]
+        process.useUTF8Locale()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        try process.run()
+        let (out, err) = drainConcurrently(outPipe, errPipe)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw SecurityScanError.extractionFailed(
+                message.flatMap { $0.isEmpty ? nil : $0 } ?? "invalid ZIP archive"
+            )
+        }
+
+        let summary = String(data: out, encoding: .utf8) ?? ""
+        let regex = try NSRegularExpression(
+            pattern: "([0-9]+) files?, ([0-9]+) bytes uncompressed, ([0-9]+) bytes compressed",
+            options: []
+        )
+        let range = NSRange(summary.startIndex..<summary.endIndex, in: summary)
+        guard let match = regex.firstMatch(in: summary, options: [], range: range),
+              let entryRange = Range(match.range(at: 1), in: summary),
+              let unpackedRange = Range(match.range(at: 2), in: summary),
+              let compressedRange = Range(match.range(at: 3), in: summary),
+              let entries = UInt64(summary[entryRange]),
+              let unpacked = UInt64(summary[unpackedRange]),
+              let compressed = UInt64(summary[compressedRange]) else {
+            throw SecurityScanError.extractionFailed("could not inspect ZIP archive totals")
+        }
+
+        guard entries <= maxArchiveEntries else {
+            throw SecurityScanError.resourceLimitExceeded("contains more than 100,000 entries")
+        }
+        guard unpacked <= maxUncompressedBytes else {
+            throw SecurityScanError.resourceLimitExceeded("uncompressed contents are larger than 8 GiB")
+        }
+        if unpacked > 512 * 1_024 * 1_024, compressed > 0,
+           Double(unpacked) / Double(compressed) > maxSuspiciousCompressionRatio {
+            throw SecurityScanError.resourceLimitExceeded("suspicious compression ratio exceeds 500:1")
+        }
+    }
+
+    /// Allows normal in-bundle symlinks but rejects any link whose resolved target
+    /// escapes the private extraction directory.
+    static func validateExtractedTree(at root: URL) throws {
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let rootPrefix = canonicalRoot.path.hasSuffix("/") ? canonicalRoot.path : canonicalRoot.path + "/"
+        let keys: [URLResourceKey] = [.isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: keys, options: [], errorHandler: nil
+        ) else { return }
+
+        for case let url as URL in enumerator {
+            guard (try? url.resourceValues(forKeys: Set(keys)).isSymbolicLink) == true else { continue }
+            let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard resolved == canonicalRoot.path || resolved.hasPrefix(rootPrefix) else {
+                throw SecurityScanError.unsafeArchive("symlink escapes the extracted bundle: \(url.lastPathComponent)")
+            }
+        }
+    }
+
     static func extract(ipaPath: String, to dir: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -873,15 +1000,15 @@ struct IPASecurityScanner {
     /// a process writes enough to both streams.
     static func drainConcurrently(_ primary: Pipe, _ secondary: Pipe) -> (primary: Data, secondary: Data) {
         let queue = DispatchQueue(label: "ipaverse.IPASecurityScanner.drain")
-        var secondaryData = Data()
+        let secondaryData = LockedDataBox()
         let done = DispatchSemaphore(value: 0)
         queue.async {
-            secondaryData = secondary.fileHandleForReading.readDataToEndOfFile()
+            secondaryData.store(secondary.fileHandleForReading.readDataToEndOfFile())
             done.signal()
         }
         let primaryData = primary.fileHandleForReading.readDataToEndOfFile()
         done.wait()
-        return (primaryData, secondaryData)
+        return (primaryData, secondaryData.load())
     }
 
     private static func decodeMobileProvision(at url: URL) -> [String: Any]? {

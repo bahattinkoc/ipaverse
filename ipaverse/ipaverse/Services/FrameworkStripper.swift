@@ -52,10 +52,9 @@ struct FrameworkStripper {
         }
 
         for bundleRoot in bundleRoots {
-            let executableURL = bundleRoot.appendingPathComponent(bundleRoot.deletingPathExtension().lastPathComponent)
-            if fm.fileExists(atPath: executableURL.path) {
+            if let executableURL = executableURL(in: bundleRoot) {
                 for name in frameworkNames {
-                    if (try? removeLoadCommand(binaryURL: executableURL, frameworkName: name)) == true {
+                    if try removeLoadCommand(binaryURL: executableURL, frameworkName: name) {
                         progress("Unlinked \(name) from \(bundleRoot.lastPathComponent)")
                     }
                 }
@@ -66,15 +65,29 @@ struct FrameworkStripper {
                 let fwURL = frameworksDir.appendingPathComponent("\(name).framework")
                 let dylibURL = frameworksDir.appendingPathComponent("\(name).dylib")
                 if fm.fileExists(atPath: fwURL.path) {
-                    try? fm.removeItem(at: fwURL)
+                    try fm.removeItem(at: fwURL)
                     progress("Deleted \(name).framework from \(bundleRoot.lastPathComponent)")
                 }
                 if fm.fileExists(atPath: dylibURL.path) {
-                    try? fm.removeItem(at: dylibURL)
+                    try fm.removeItem(at: dylibURL)
                     progress("Deleted \(name).dylib from \(bundleRoot.lastPathComponent)")
                 }
             }
         }
+    }
+
+    private static func executableURL(in bundleURL: URL) -> URL? {
+        let fm = FileManager.default
+        let plistURL = bundleURL.appendingPathComponent("Info.plist")
+        if let data = try? Data(contentsOf: plistURL),
+           let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+           let name = plist["CFBundleExecutable"] as? String,
+           !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\") {
+            let url = bundleURL.appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+        let fallback = bundleURL.appendingPathComponent(bundleURL.deletingPathExtension().lastPathComponent)
+        return fm.fileExists(atPath: fallback.path) ? fallback : nil
     }
 
     // MARK: - Mach-O patching

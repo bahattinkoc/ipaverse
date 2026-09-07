@@ -67,27 +67,36 @@ struct ClassBrowserView: View {
                         .controlSize(.small)
                     }
                 }
+                .padding(.horizontal)
+                .padding(.top, 8)
             }
 
-            HStack(spacing: 10) {
-                Picker("", selection: $mode) {
-                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 280)
-
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").foregroundColor(.secondary).font(.caption)
-                    TextField("Filter…", text: $searchText).textFieldStyle(.plain)
-                }
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
-
-                Spacer()
-            }
+            modeBar
         }
-        .padding()
+    }
+
+    /// Keep the mode tabs aligned with Network Logger's tab bar: explicitly
+    /// inset from the leading edge instead of relying on the parent stack's padding.
+    private var modeBar: some View {
+        HStack(spacing: 10) {
+            Picker("", selection: $mode) {
+                ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary).font(.caption)
+                TextField("Filter…", text: $searchText).textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
+
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Content

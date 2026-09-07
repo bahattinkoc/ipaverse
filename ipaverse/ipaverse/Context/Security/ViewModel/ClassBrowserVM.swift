@@ -68,7 +68,7 @@ final class ClassBrowserVM: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 let (dir, list) = try ClassDumper.availableTargets(ipaPath: path)
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     guard let self, self.generation == myGeneration else { return }
                     self.workDir = dir
                     self.targets = list
@@ -86,7 +86,7 @@ final class ClassBrowserVM: ObservableObject {
                     }
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     guard let self, self.generation == myGeneration else { return }
                     self.state = .failed(error.localizedDescription)
                 }
@@ -117,12 +117,12 @@ final class ClassBrowserVM: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 let result = try ClassDumper.dump(target: target) { step in
-                    Task { @MainActor in
+                    Task { @MainActor [weak self] in
                         guard let self, self.generation == myGeneration else { return }
                         self.dumpStep = step
                     }
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     guard let self, self.generation == myGeneration else { return }
                     self.state = .done(result)
                 }
@@ -133,14 +133,14 @@ final class ClassBrowserVM: ObservableObject {
                 if ClassMethodResolver.isAvailable {
                     let methods = ClassMethodResolver.resolveMethods(binaryURL: target.url) { _ in }
                     if !methods.isEmpty {
-                        await MainActor.run {
+                        await MainActor.run { [weak self] in
                             guard let self, self.generation == myGeneration else { return }
                             self.methodsByClass = methods
                         }
                     }
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     guard let self, self.generation == myGeneration else { return }
                     self.state = .failed(error.localizedDescription)
                 }
