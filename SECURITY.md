@@ -50,9 +50,15 @@ Out of scope:
 
 ## Design principles relevant to security reports
 
-As documented in the [README](README.md#security--privacy): ipaverse runs
-entirely locally, stores credentials in macOS Keychain, never transmits
-passwords directly (SRP-6a challenge/response), and never uploads Apple ID
-data, certificates, provisioning profiles, or IPA files to any third-party
-server. Reports that show a violation of these guarantees are treated as
+As documented in the [README](README.md#security--privacy), sensitive IPA
+processing is local and ipaverse has no project-operated authentication relay
+or telemetry backend. It communicates directly with Apple for authentication
+and App Store operations. Raw passwords are not sent directly during the
+GrandSlam SRP-6a exchange, and account/session credentials are stored in
+macOS Keychain.
+
+User-initiated update checks, on-demand Frida downloads, and optional tool
+installation may contact GitHub, Homebrew, pip, or a tool vendor. Those paths
+must never include Apple credentials, certificates, provisioning profiles, or
+IPA contents. Reports showing a violation of these boundaries are treated as
 high priority.

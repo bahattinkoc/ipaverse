@@ -67,9 +67,10 @@ Re-sign any DRM-free IPA with your own certificate and provisioning profile — 
 
 ## Install to device
 
-Push a re-signed IPA straight to a connected iPhone, iPad, or Apple TV — over USB or Wi-Fi.
+Push a compatible IPA straight to a connected iPhone or iPad — over USB or Wi-Fi.
 
 - Pair the device once over cable, then enable **Connect via network** in Xcode → Devices to install wirelessly afterward.
+- On devices where Apple's CoreDevice path is available, ipaverse uses `xcrun devicectl`. A bundled libimobiledevice backend provides a USB fallback, particularly for devices on iOS/iPadOS 16 and earlier.
 - Each device in the list shows its connection type (USB/Wi-Fi), model, and iOS version; devices that don't meet the app's minimum iOS version are grayed out.
 - If the app was downloaded under a different Apple ID than the one currently active, ipaverse warns before installing — a FairPlay-bound app will crash on launch under the wrong account — and requires you to explicitly confirm "Install Anyway".
 
@@ -77,7 +78,7 @@ Push a re-signed IPA straight to a connected iPhone, iPad, or Apple TV — over 
 
 ## Security Testing
 
-ipaverse includes a small toolkit aimed at security researchers doing **authorized** iOS app testing (bug bounty programs, contracted pentests, or testing your own apps) — not general sideloading. All of it lives in the Re-sign and Downloaded screens. None of it is bundled into ipaverse.app itself (it would otherwise roughly double the download size) — Frida's components are downloaded once, on first use, and cached locally.
+ipaverse includes a small toolkit aimed at security researchers doing **authorized** iOS app testing (bug bounty programs, contracted pentests, or testing your own apps) — not general sideloading. It is available from the Re-sign and Downloaded screens. The static scanner, class browser, UI, and scripts ship with ipaverse; the much larger Frida Gadget and core binaries are downloaded once on first use, verified against pinned sizes and SHA-256 digests, and cached locally.
 
 > ⚠️ **Educational and authorized use only.** These tools exist to help you test apps you own or are explicitly authorized to test. Do not use them against any app, account, or system you don't have permission to test — doing so may violate Apple's terms of service and/or the law. ipaverse and its author take no responsibility for misuse.
 
@@ -86,8 +87,8 @@ ipaverse includes a small toolkit aimed at security researchers doing **authoriz
 The tools below that actually change, extract, or live-instrument app behavior — **Security Testing Mode**, **Inject Frida Gadget**, **Dump Decrypted Copy**, **Reverse Engineer**, and **Move to New Identity** in the Re-sign window — are disabled by default. Turn on **Evil Mode** to unlock them: click the flame icon in the main window's toolbar. While it's on, the flame shows filled/red and a small "· Evil Mode" label appears next to the app name in the main window's footer, so it's always obvious when these are active. Toggle it off again to re-lock everything.
 
 - **Security Testing Mode** *(Evil Mode)* — one toggle that disables ATS (`NSAllowsArbitraryLoads`) on the signed build so a MITM proxy (Burp, mitmproxy) can intercept its traffic. Every re-signed build is also always debuggable (`get-task-allow`). This does **not** bypass in-app certificate/public-key pinning — that's enforced in the app's own code, independent of ATS.
-- **Inject Frida Gadget** *(Evil Mode)* — patches the app's main binary to load a bundled [Frida](https://frida.re) Gadget at launch, so you can attach with `frida -H <device-ip>:27042 -n Gadget` (or [objection](https://github.com/sensepost/objection)) and instrument it — including bypassing pinning — on a **non-jailbroken** device. No `frida-server`/root needed, since the agent runs in-process.
-- **Reverse Engineer** *(Evil Mode)* — a static analysis pass (severity-graded findings, redacted-by-default secrets, manual string search, exportable Markdown/JSON report) plus a live Frida toolkit: a class browser, a method tracer, a Burp-style network interceptor (pause/edit/forward or drop requests *and* responses), a live UI hierarchy inspector (flash any on-screen element on the device), and a data browser for NSUserDefaults/Keychain/sandbox files — NSUserDefaults values are editable in place, live on the device. Attach with a jailbroken device over USB or a Gadget-injected app.
+- **Inject Frida Gadget** *(Evil Mode)* — downloads and caches [Frida](https://frida.re) Gadget if needed, then patches the app's main binary to load it at launch. You can attach with `frida -H <device-ip>:27042 -n Gadget` (or [objection](https://github.com/sensepost/objection)) and instrument the app — including testing pinning bypasses — on a **non-jailbroken** device. No `frida-server`/root is needed because the agent runs in-process.
+- **Reverse Engineer** *(Evil Mode)* — a static analysis pass (severity-graded findings, redacted-by-default secrets, manual string search, exportable Markdown/JSON report), an Objective-C class browser, and a live Frida toolkit: bypass scripts, a method tracer, an `NSURLSession` interceptor (pause/edit/forward or drop supported requests and responses), a live UI hierarchy inspector (flash an on-screen element on the device), and app-data tools. NSUserDefaults string/number values are editable in place; the Keychain view lists item metadata without secret values; matching sandbox database/plist files can be downloaded. Live tools attach to a running process through Frida on a connected device or a Gadget-injected app.
 - **Dump Decrypted Copy** *(Evil Mode)* — for a real App Store IPA (which is FairPlay-encrypted even when the app is free), this reads the already-decrypted binary out of a *running* instance of the app on a **jailbroken** source device you control, and patches that into a DRM-free copy you can then re-sign and test on a separate, non-jailbroken target device. This is the same technique tools like `frida-ios-dump` use: it captures memory the OS already decrypted to execute the app, rather than breaking FairPlay's cryptography. The target app needs to actually be open on the source device — if it lazily loads a framework you need dumped, trigger that code path first or the dump for that framework will fail.
 
 None of this replaces getting proper authorization before testing an app you don't own.
@@ -99,4 +100,5 @@ None of this replaces getting proper authorization before testing an app you don
 - **Account** — profile summary, App Store region/storefront picker, sign out.
 - **Downloads** — where IPAs are saved, and whether they're kept as `.ipa` or `.zip`.
 - **Search** — result limit (5/50/100/200), search-history toggle, and a "Clear Search History" action.
-- **About** — app version and third-party credits/licenses.
+- **Tools** — detect, install, or remove optional disassemblers, MITM proxies, Frida utilities, and device tools through Homebrew/pip; commercial tools open their vendor download page instead.
+- **About** — app version, a manual GitHub update check, and a link to the source repository.

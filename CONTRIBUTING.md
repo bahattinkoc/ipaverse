@@ -6,10 +6,15 @@ submitting changes.
 
 ## Before you start
 
-ipaverse only works with **DRM-free IPAs**. Contributions that add FairPlay
-decryption, DRM bypass, or App Store policy circumvention will not be
-accepted. See [Security & Privacy](README.md#security--privacy) in the README
-for the project's boundaries.
+Re-signing requires a **DRM-free IPA**, while the authorized security-testing
+toolkit can create a decrypted copy from a running app on a jailbroken source
+device controlled by the user. Contributions in this area must preserve the
+explicit authorization warnings, Evil Mode guardrails, and locally scoped
+data handling. Features intended to obtain paid apps without a valid license,
+steal credentials, evade Apple account authorization, or target third parties
+without permission will not be accepted. See
+[Security Testing](README.md#security-testing) and
+[Security & Privacy](README.md#security--privacy) for the project's boundaries.
 
 ## Getting set up
 

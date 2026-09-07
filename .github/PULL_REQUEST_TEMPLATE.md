@@ -21,8 +21,10 @@
 ## Checklist
 
 - [ ] I've read [CONTRIBUTING.md](../CONTRIBUTING.md)
-- [ ] My changes don't add DRM bypass, FairPlay decryption, or App Store
-      policy circumvention
+- [ ] Security-testing changes preserve authorization warnings, Evil Mode
+      guardrails, and local handling of sensitive app data
+- [ ] My changes don't enable unlicensed paid-app acquisition, credential
+      theft, Apple account authorization bypass, or unauthorized targeting
 - [ ] I built and ran the app locally to verify the change
 - [ ] I did not commit any real Apple ID credentials, certificates, or
       provisioning profiles

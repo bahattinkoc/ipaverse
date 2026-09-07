@@ -116,7 +116,7 @@ enum FridaScriptLibrary {
         FridaScript(
             id: "network-request-logger",
             title: "Network Logger",
-            summary: "Hooks NSURLSession at the API layer — before TLS, before any pinning check runs — so it sees every request and response regardless of pinning. Logs pass-through by default; flip on Intercept to pause each request AND its response, edit method/URL/headers/body or status/headers/body, then Forward or Drop — same as Burp's Proxy tab, just at the hook point instead of a network proxy.",
+            summary: "Hooks NSURLSession data tasks at the API layer, before TLS and pinning checks. Supported requests pass through and are logged by default; flip on Intercept to pause their requests and completion-handler responses, edit method/URL/headers/body or status/headers/body, then Forward or Drop. Apps using other networking APIs or custom stacks need separate hooks.",
             category: .live,
             icon: "network",
             requiresClassName: false,

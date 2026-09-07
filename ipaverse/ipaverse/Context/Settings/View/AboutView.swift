@@ -34,7 +34,7 @@ struct AboutView: View {
             }
             .padding(.top, 12)
 
-            Text("Download, re-sign, and sideload iOS apps —\nwithout Xcode or Terminal.")
+            Text("Search, inspect, re-sign, and install iOS apps —\nfrom one native macOS workspace.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
