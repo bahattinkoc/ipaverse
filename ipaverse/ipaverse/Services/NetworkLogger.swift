@@ -145,6 +145,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
 
     /// Recursively walks a JSON/plist-shaped value (dictionaries, arrays, scalars) and replaces
     /// any value whose key matches a sensitive pattern with a redaction placeholder.
+    /// Converts plist-only types to JSON-safe values without exposing binary contents.
     private func redactSensitiveValues(_ value: Any) -> Any {
         if let dict = value as? [String: Any] {
             var result: [String: Any] = [:]
@@ -160,6 +161,10 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
             return result
         } else if let array = value as? [Any] {
             return array.map { redactSensitiveValues($0) }
+        } else if let data = value as? Data {
+            return ["byteCount": data.count, "note": "Binary data omitted"]
+        } else if let date = value as? Date {
+            return ISO8601DateFormatter().string(from: date)
         }
         return value
     }
@@ -278,7 +283,9 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
 
     /// Prints the log in a formatted JSON style
     private func printLog(_ data: [String: Any]) {
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]),
+        // Invalid object types raise an Objective-C exception that `try?` cannot catch.
+        guard JSONSerialization.isValidJSONObject(data),
+              let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]),
               let jsonString = String(data: jsonData, encoding: .utf8) else {
             print("❌ Failed to serialize log data")
             return
