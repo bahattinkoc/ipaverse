@@ -66,6 +66,7 @@ final class LoginVM: ObservableObject {
     }
 
     func login() async {
+        guard !isLoading else { return }
         guard validateInputs() else { return }
 
         loginState = .loading
@@ -126,6 +127,8 @@ final class LoginVM: ObservableObject {
     }
 
     func resendAuthCode() async {
+        guard !isLoading else { return }
+        loginState = .loading
         errorMessage = ""
         authCode = ""
 
@@ -196,6 +199,7 @@ final class LoginVM: ObservableObject {
     }
 
     func quickLogin(profile: SavedProfile) async {
+        guard !isLoading else { return }
         guard let savedPassword = keychainService.getProfilePassword(for: profile.email) else {
             selectProfileForEditing(profile)
             return

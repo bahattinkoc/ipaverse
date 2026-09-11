@@ -57,6 +57,18 @@ and App Store operations. Raw passwords are not sent directly during the
 GrandSlam SRP-6a exchange, and account/session credentials are stored in
 macOS Keychain.
 
+Anisette generation defaults to Automatic: it tries AOSKit locally, then uses
+the configured Anisette V3 service if local generation fails. The login screen
+discloses this service use. Advanced Sign-in Settings lets users disable external
+generation (This Mac Only), choose a custom server, or require Server Only.
+Existing explicit preferences are preserved. This service receives a generated device identifier and personalization
+data (`adi_pb`); provisioning also exchanges `spim`, `cpim`, `ptm`, and `tk`
+with Apple's provisioning endpoints. It receives no Apple Account email,
+password, account/session cookies, or verification codes. The configured server
+is a trust boundary; its persistent device identity is stored in Keychain, and
+its requests use an isolated URLSession without cookies, credential storage,
+redirects, or body logging. See [the implementation notes](docs/anisette.md).
+
 User-initiated update checks, on-demand Frida downloads, and optional tool
 installation may contact GitHub, Homebrew, pip, or a tool vendor. Those paths
 must never include Apple credentials, certificates, provisioning profiles, or

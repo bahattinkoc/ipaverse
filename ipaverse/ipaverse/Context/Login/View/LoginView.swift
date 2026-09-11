@@ -10,6 +10,8 @@ import SwiftUI
 struct LoginView: View {
     @EnvironmentObject var viewModel: LoginVM
     @FocusState private var focusedField: Field?
+    @AppStorage(AnisetteConfiguration.modeKey) private var anisetteMode = AnisetteConfiguration.Mode.automatic.rawValue
+    @AppStorage(AnisetteConfiguration.serverKey) private var anisetteServer = AnisetteConfiguration.defaultServer
 
     enum Field {
         case email, password
@@ -41,6 +43,8 @@ struct LoginView: View {
                     if !viewModel.errorMessage.isEmpty {
                         errorMessageView
                     }
+
+                    signInServiceNotice
                 }
                 .padding(.horizontal, 32)
                 .padding(.top, 24)
@@ -71,6 +75,23 @@ struct LoginView: View {
     }
 
     // MARK: - Back Button
+
+    private var signInServiceNotice: some View {
+        let mode = AnisetteConfiguration.Mode(rawValue: anisetteMode) ?? .automatic
+        let host = URLComponents(string: anisetteServer)?.host
+        let service = host == "ani.sidestore.zip" ? "SideStore" : (host ?? "the configured service")
+        return Group {
+            if mode != .local {
+                Text(mode == .remote
+                     ? "ipaverse uses \(service) to help prepare your sign-in. Your password and verification codes are never shared with this service."
+                     : "If needed, ipaverse uses \(service) to help prepare your sign-in. Your password and verification codes are never shared with this service.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     private func backButton(action: @escaping () -> Void) -> some View {
         HStack {

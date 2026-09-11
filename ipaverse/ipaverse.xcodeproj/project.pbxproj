@@ -292,6 +292,7 @@
 					"$(SRCROOT)/Vendor/unicorn/include",
 					"$(SRCROOT)/Vendor/frida-core/include",
 				);
+				INFOPLIST_FILE = Configuration/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = ipaverse;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -331,6 +332,7 @@
 					"$(SRCROOT)/Vendor/unicorn/include",
 					"$(SRCROOT)/Vendor/frida-core/include",
 				);
+				INFOPLIST_FILE = Configuration/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = ipaverse;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";

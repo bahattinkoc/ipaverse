@@ -125,6 +125,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
 
     private func isSensitiveKey(_ key: String) -> Bool {
         let normalized = key.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
+        if ["adipb", "identifier", "spim", "cpim", "ptm", "tk"].contains(normalized) { return true }
         return sensitiveKeyPatterns.contains { normalized.contains($0) }
     }
 

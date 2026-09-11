@@ -13,6 +13,7 @@ struct SettingsView: View {
     @StateObject private var viewModel = SettingsVM()
     @EnvironmentObject var loginViewModel: LoginVM
     @State private var showRegionPicker = false
+    @State private var showSignInOptions = false
 
     var body: some View {
         TabView {
@@ -40,8 +41,15 @@ struct SettingsView: View {
         Form {
             profileSection
             accountSection
+            Section("Advanced") {
+                Button("Advanced Sign-in Settings…") { showSignInOptions = true }
+                    .disabled(loginViewModel.isLoading)
+            }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showSignInOptions) {
+            AnisetteOptionsView()
+        }
         .sheet(isPresented: $showRegionPicker) {
             RegionPickerView()
                 .environmentObject(loginViewModel)

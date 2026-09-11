@@ -46,6 +46,11 @@ Build and run with `Cmd+R` from Xcode.
    a PR. There is no CI test suite yet, so manual verification is the
    baseline.
 
+For Anisette changes, run `bash scripts/test-anisette.sh` on macOS. This standalone
+regression suite uses mocked Apple/V3 endpoints and an in-memory identity store;
+it does not contact a real server or read/write your Keychain. Real account login
+and 2FA still require manual validation as described in [docs/anisette.md](docs/anisette.md).
+
 ## Submitting a pull request
 
 * Fill out the pull request template.

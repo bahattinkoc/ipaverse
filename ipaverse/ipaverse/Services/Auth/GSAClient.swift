@@ -28,29 +28,30 @@ struct GSAAccountData {
 
 enum GSAError: LocalizedError {
     case networkError
+    case rateLimited
     case serverError(code: Int, message: String)
     case needsTwoFactor(identityToken: String, phoneId: Int?, maskedPhone: String?)
     case invalidResponse(String)
-    case anisetteUnavailable
 
     var errorDescription: String? {
         switch self {
         case .networkError: "Network connection error"
+        case .rateLimited: "Apple is temporarily limiting sign-in requests (HTTP 429). Please wait before trying again."
         case .serverError(let code, let message): "GSA error \(code): \(message)"
         case .needsTwoFactor: "Two-factor authentication required"
         case .invalidResponse(let detail): "Unexpected GSA response: \(detail)"
-        case .anisetteUnavailable: "Could not generate anisette data on this Mac"
         }
     }
 }
 
 final class GSAClient {
     private let endpoint = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
-    private let session: URLSession
-    private let anisette = AnisetteProvider.shared
+    private let transport: AuthenticationHTTPTransport
+    private let anisette: AnisetteSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession = .shared, anisette: AnisetteSession) {
+        self.transport = AuthenticationHTTPTransport(session: session)
+        self.anisette = anisette
     }
 
     // MARK: - Public
@@ -58,8 +59,6 @@ final class GSAClient {
     /// Performs the full GSA SRP handshake. Returns decrypted account data on success,
     /// or throws `.needsTwoFactor` when the account requires a verification code.
     func authenticate(username: String, password: String) async throws -> GSAAccountData {
-        guard anisette.isOTPAvailable else { throw GSAError.anisetteUnavailable }
-
         let srp = SRPClient()
 
         // --- init ---
@@ -112,7 +111,7 @@ final class GSAClient {
             // Request a verification code. For accounts signed in on an Apple device
             // this pushes to trusted devices; otherwise it falls back to SMS and we
             // get back the trusted phone number id + masked number for the UI.
-            let info = await requestTwoFactorCode(identityToken: identity)
+            let info = try await requestTwoFactorCode(identityToken: identity)
             throw GSAError.needsTwoFactor(identityToken: identity, phoneId: info.phoneId, maskedPhone: info.maskedPhone)
         }
 
@@ -125,38 +124,38 @@ final class GSAClient {
 
     // MARK: - Request plumbing
 
+    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        NetworkLogger.shared.logRequest(request)
+        let (data, response) = try await transport.data(for: request)
+        NetworkLogger.shared.logResponse(response, data: data, error: nil)
+        // Check before parsing: Apple's edge returns HTML, including during 2FA.
+        // Do not replay a rate-limited handshake or verification-code request.
+        if (response as? HTTPURLResponse)?.statusCode == 429 {
+            throw GSAError.rateLimited
+        }
+        return (data, response)
+    }
+
     /// Sends one GsService2 operation and returns the inner `Response` dict.
-    /// gsa.apple.com occasionally answers with a transient 5xx HTML error page
-    /// instead of a plist — most often observed right after a burst of
-    /// requests elsewhere (e.g. AppStoreService's MZFinance host-rotation
-    /// retries). One retry after a short pause clears the vast majority of
-    /// these without ever surfacing a raw parse error to the user; a
-    /// non-5xx unparseable body (e.g. a genuinely malformed response) is not
-    /// retried since a retry can't fix that.
+    /// Retry one potentially transient 5xx response. A 503 alone does not prove
+    /// an outage: GSA also returns it for unsupported client identifiers (see
+    /// AnisetteClientInfo). Other unparseable responses are not retried.
     private func send(request inner: [String: Any]) async throws -> [String: Any] {
-        var requestBody = inner
-        requestBody["cpd"] = clientProvidedData()
-
-        let body: [String: Any] = [
-            "Header": ["Version": "1.0.1"],
-            "Request": requestBody
-        ]
-
-        let plistData = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
-
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.httpBody = plistData
-        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
-        req.setValue("*/*", forHTTPHeaderField: "Accept")
-        req.setValue("akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0", forHTTPHeaderField: "User-Agent")
-        req.setValue(anisette.headers()["X-Mme-Client-Info"], forHTTPHeaderField: "X-MMe-Client-Info")
-
         let maxAttempts = 2
         for attempt in 1...maxAttempts {
-            NetworkLogger.shared.logRequest(req)
-            let (data, response) = try await session.data(for: req)
-            NetworkLogger.shared.logResponse(response, data: data, error: nil)
+            let headers = try await anisette.headers()
+            var requestBody = inner
+            requestBody["cpd"] = clientProvidedData(headers: headers)
+            let body: [String: Any] = ["Header": ["Version": "1.0.1"], "Request": requestBody]
+            var req = URLRequest(url: endpoint)
+            req.httpMethod = "POST"
+            req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
+            req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
+            req.setValue("*/*", forHTTPHeaderField: "Accept")
+            req.setValue("akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0", forHTTPHeaderField: "User-Agent")
+            req.setValue(headers["X-Mme-Client-Info"], forHTTPHeaderField: "X-MMe-Client-Info")
+
+            let (data, response) = try await perform(req)
 
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard let parsed = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
@@ -164,7 +163,7 @@ final class GSAClient {
                 let isTransient = (500...599).contains(statusCode)
                 if isTransient, attempt < maxAttempts {
                     print("🔐 [GSA] transient response (HTTP \(statusCode)) on attempt \(attempt) — retrying")
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    try await Task.sleep(nanoseconds: 1_500_000_000)
                     continue
                 }
                 throw GSAError.invalidResponse("unparseable GsService2 body (HTTP \(statusCode))")
@@ -192,14 +191,15 @@ final class GSAClient {
     /// account has no trusted device, Apple offers an SMS fallback — in that case
     /// we trigger the SMS and return the trusted phone number id (used to validate).
     /// Returns `nil` for the trusted-device push path (no phone id).
-    func requestTwoFactorCode(identityToken: String) async -> (phoneId: Int?, maskedPhone: String?) {
+    func requestTwoFactorCode(identityToken: String) async throws -> (phoneId: Int?, maskedPhone: String?) {
         var req = URLRequest(url: URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!)
         req.httpMethod = "GET"
-        applyTwoFactorHeaders(&req, identityToken: identityToken)
-        NetworkLogger.shared.logRequest(req)
-
-        guard let (data, response) = try? await session.data(for: req) else { return (nil, nil) }
-        NetworkLogger.shared.logResponse(response, data: data, error: nil)
+        try await applyTwoFactorHeaders(&req, identityToken: identityToken)
+        let (data, response) = try await perform(req)
+        guard let status = (response as? HTTPURLResponse)?.statusCode else { throw GSAError.networkError }
+        guard (200..<300).contains(status) else {
+            throw GSAError.serverError(code: status, message: "Could not request a verification code")
+        }
 
         let body = String(decoding: data, as: UTF8.self)
         guard let phoneId = parsePhoneId(from: body) else {
@@ -207,7 +207,7 @@ final class GSAClient {
             return (nil, nil)
         }
         print("🔐 [GSA] no trusted device — requesting SMS to phone id \(phoneId)")
-        let maskedPhone = await requestSMSCode(phoneId: phoneId, identityToken: identityToken)
+        let maskedPhone = try await requestSMSCode(phoneId: phoneId, identityToken: identityToken)
         return (phoneId, maskedPhone)
     }
 
@@ -219,7 +219,7 @@ final class GSAClient {
         if let phoneId {
             var req = URLRequest(url: URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode")!)
             req.httpMethod = "POST"
-            applyTwoFactorHeaders(&req, identityToken: identityToken)
+            try await applyTwoFactorHeaders(&req, identityToken: identityToken)
             req.setValue("application/json", forHTTPHeaderField: "Accept")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
@@ -227,12 +227,10 @@ final class GSAClient {
                 "securityCode": ["code": trimmed],
                 "mode": "sms"
             ])
-            NetworkLogger.shared.logRequest(req)
-            let (data, response) = try await session.data(for: req)
-            NetworkLogger.shared.logResponse(response, data: data, error: nil)
+            let (data, response) = try await perform(req)
 
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status >= 400 {
+            guard let status = (response as? HTTPURLResponse)?.statusCode else { throw GSAError.networkError }
+            if !(200..<300).contains(status) {
                 let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 let message = ((json?["serviceErrors"] as? [[String: Any]])?.first?["message"] as? String)
                     ?? "Invalid verification code"
@@ -242,12 +240,14 @@ final class GSAClient {
         } else {
             var req = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!)
             req.httpMethod = "GET"
-            applyTwoFactorHeaders(&req, identityToken: identityToken)
+            try await applyTwoFactorHeaders(&req, identityToken: identityToken)
             req.setValue(trimmed, forHTTPHeaderField: "security-code")
-            NetworkLogger.shared.logRequest(req)
-            let (data, response) = try await session.data(for: req)
-            NetworkLogger.shared.logResponse(response, data: data, error: nil)
+            let (data, response) = try await perform(req)
 
+            guard let statusCode = (response as? HTTPURLResponse)?.statusCode else { throw GSAError.networkError }
+            guard (200..<300).contains(statusCode) else {
+                throw GSAError.serverError(code: statusCode, message: "Could not validate the verification code")
+            }
             if let plist = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
                 let status = (plist["Status"] as? [String: Any]) ?? plist
                 if let ec = (status["ec"] as? NSNumber)?.intValue, ec != 0 {
@@ -264,19 +264,21 @@ final class GSAClient {
     /// specifies the "Send Code" action as POST /auth/verify/phone/{id}/put
     /// (POST /auth/verify/phone/ only returns phone info, it does not send).
     /// Returns the masked trusted phone number (e.g. "+90 •••• ••• •• 96") for the UI.
-    private func requestSMSCode(phoneId: Int, identityToken: String) async -> String? {
+    private func requestSMSCode(phoneId: Int, identityToken: String) async throws -> String? {
         var req = URLRequest(url: URL(string: "https://gsa.apple.com/auth/verify/phone/\(phoneId)/put")!)
         req.httpMethod = "POST"
-        applyTwoFactorHeaders(&req, identityToken: identityToken)
+        try await applyTwoFactorHeaders(&req, identityToken: identityToken)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "phoneNumber": ["id": phoneId],
             "mode": "sms"
         ])
-        NetworkLogger.shared.logRequest(req)
-        guard let (data, response) = try? await session.data(for: req) else { return nil }
-        NetworkLogger.shared.logResponse(response, data: data, error: nil)
+        let (data, response) = try await perform(req)
+        guard let status = (response as? HTTPURLResponse)?.statusCode else { throw GSAError.networkError }
+        guard (200..<300).contains(status) else {
+            throw GSAError.serverError(code: status, message: "Could not request an SMS verification code")
+        }
 
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let phone = (json?["trustedPhoneNumber"] as? [String: Any]) ?? (json?["phoneNumber"] as? [String: Any])
@@ -293,19 +295,19 @@ final class GSAClient {
         return Int(digits)
     }
 
-    private func applyTwoFactorHeaders(_ req: inout URLRequest, identityToken: String) {
+    private func applyTwoFactorHeaders(_ req: inout URLRequest, identityToken: String) async throws {
+        let headers = try await anisette.headers()
         req.setValue(identityToken, forHTTPHeaderField: "X-Apple-Identity-Token")
         req.setValue("application/x-buddyml", forHTTPHeaderField: "Accept")
         req.setValue("com.apple.gs.xcode.auth", forHTTPHeaderField: "X-Apple-App-Info")
         req.setValue("akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0", forHTTPHeaderField: "User-Agent")
-        req.setValue(anisette.headers()["X-Mme-Client-Info"], forHTTPHeaderField: "X-MMe-Client-Info")
-        for (key, value) in anisette.headers() {
+        for (key, value) in headers {
             req.setValue(value, forHTTPHeaderField: key)
         }
     }
 
     /// Client-provided data (cpd): static GSA flags + anisette device headers.
-    private func clientProvidedData() -> [String: Any] {
+    private func clientProvidedData(headers: [String: String]) -> [String: Any] {
         var cpd: [String: Any] = [
             "bootstrap": true,
             "icscrec": true,
@@ -314,7 +316,7 @@ final class GSAClient {
             "svct": "iCloud",
             "loc": Locale.current.identifier
         ]
-        for (key, value) in anisette.headers() {
+        for (key, value) in headers {
             cpd[key] = value
         }
         return cpd
