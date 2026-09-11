@@ -16,5 +16,8 @@ xcrun swiftc -swift-version 5 -D DEBUG -parse-as-library \
   ipaverse/ipaverse/Services/Auth/BigIntJS.swift \
   ipaverse/ipaverse/Services/Auth/CryptoHelpers.swift \
   ipaverse/ipaverse/Services/NetworkLogger.swift \
-  Tests/MZFinanceTests.swift Tests/AnisetteTests.swift -o "$test_dir/anisette-tests"
+  ipaverse/ipaverse/Services/AppStoreDownloadProduct.swift \
+  ipaverse/ipaverse/Services/AppStorePurchase.swift \
+  Tests/PurchaseTests.swift \
+  Tests/DownloadProductTests.swift Tests/MZFinanceTests.swift Tests/AnisetteTests.swift -o "$test_dir/anisette-tests"
 "$test_dir/anisette-tests"

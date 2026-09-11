@@ -351,122 +351,36 @@ final class AppStoreService: AppStoreServiceProtocol {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
 
-        if let price = app.price, price > 0 {
-            throw LoginError.unknownError("Purchasing paid apps is not supported")
-        }
-
-        do {
-            try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: Constant.pricingParameterAppStore)
-        } catch {
-            if error.localizedDescription.contains("temporarily unavailable") {
-                try await purchaseWithParams(account: account, app: app, guid: guid, pricingParameters: Constant.pricingParameterAppleArcade)
-            } else {
-                throw error
-            }
-        }
-    }
-
-    private func purchaseWithParams(account: Account, app: AppStoreApp, guid: String, pricingParameters: String) async throws {
         let podPrefix = account.pod.map { "p\($0)-" } ?? ""
         let url = URL(string: "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathPurchase)")!
-
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
         applyAppStoreHeaders(to: &request, account: account, includeStoreFrontAndToken: true)
-
-        let payload: [String: Any] = [
-            "appExtVrsId": "0",
-            "hasAskedToFulfillPreorder": "true",
-            "buyWithoutAuthorization": "true",
-            "hasDoneAgeCheck": "true",
-            "guid": guid,
-            "needDiv": "0",
-            "origPage": "Software-\(app.id ?? 0)",
-            "origPageLocation": "Buy",
-            "price": "0",
-            "pricingParameters": pricingParameters,
-            "productType": "C",
-            "salableAdamId": app.id ?? 0
-        ]
-
-        let plistData = try PropertyListSerialization.data(
-            fromPropertyList: payload,
-            format: .xml,
-            options: 0
-        )
-        request.httpBody = plistData
-
-        logger.logRequest(request)
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            logger.logResponse(response, data: data, error: LoginError.networkError)
-            throw LoginError.networkError
-        }
-
-        logger.logResponse(response, data: data, error: nil)
-
-        if httpResponse.statusCode == 500 {
-            throw LoginError.unknownError("License already exists")
-        }
-
-        let normalizedData = normalizePlistData(data)
-        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
-
-        if let failureType = plist?["failureType"] as? String {
-            let customerMessage = plist?["customerMessage"] as? String ?? ""
-            if Constant.authFailureCodes.contains(failureType) ||
-               customerMessage == Constant.customerMessagePasswordChanged {
+        do {
+            try await AppStorePurchase.acquire(
+                request: request, appID: app.id, price: app.price, guid: guid,
+                allowsArcade: app.platform != .macos,
+                send: { request in
+                    self.logger.logRequest(request)
+                    let (data, response) = try await self.session.data(for: request)
+                    self.logger.logResponse(response, data: data, error: nil)
+                    return (self.normalizePlistData(data), response)
+                }
+            )
+        } catch AppStorePurchaseError.failure(let code, let message) {
+            if Constant.authFailureCodes.contains(code) || message == Constant.customerMessagePasswordChanged {
                 throw LoginError.tokenExpired
             }
-            if failureType == Constant.failureTypeLicenseAlreadyExists {
-                throw LoginError.unknownError("License already exists")
-            }
-            if failureType == Constant.failureTypeTemporarilyUnavailable {
-                throw LoginError.unknownError("Item is temporarily unavailable")
-            }
-            if !failureType.isEmpty {
-                let msg = customerMessage.isEmpty ? "Unknown error" : customerMessage
-                throw LoginError.unknownError(msg)
-            }
-        }
-
-        if let jingleDocType = plist?["jingleDocType"] as? String,
-           let status = plist?["status"] as? Int {
-            if jingleDocType != "purchaseSuccess" || status != 0 {
-                throw LoginError.unknownError("Failed to purchase app")
-            }
+            throw AppStorePurchaseError.failure(code: code, message: message)
         }
     }
 
     // MARK: - Download
     func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, downloadedVersion: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
-        var purchased = false
-
-        do {
-            _ = try await checkLicense(app: app, account: account)
-            purchased = true
-        } catch {
-            if error.localizedDescription.contains("license") || error.localizedDescription.contains("License") {
-                do {
-                    try await purchase(app: app, account: account)
-                    purchased = true
-                } catch {
-                    if !error.localizedDescription.contains("already exists") {
-                        throw error
-                    }
-                    purchased = true
-                }
-            } else {
-                throw error
-            }
-        }
-
-        if !purchased {
-            throw LoginError.unknownError("Failed to verify app license")
-        }
-
-        let result = try await performDownload(app: app, account: account, outputPath: outputPath, externalVersionId: externalVersionId, progress: progress)
+        let result = try await AppStorePurchase.withLicense(operation: {
+            try await self.performDownload(app: app, account: account, outputPath: outputPath, externalVersionId: externalVersionId, progress: progress)
+        }, isLicenseRequired: { ($0 as? LoginError) == .licenseRequired }, purchase: {
+            try await self.purchase(app: app, account: account)
+        })
 
         if result.success, let modelContext {
             if await findExistingDownloadedApp(app: app, context: modelContext) != nil {
@@ -479,110 +393,79 @@ final class AppStoreService: AppStoreServiceProtocol {
         return result
     }
 
-    private func checkLicense(app: AppStoreApp, account: Account) async throws {
+    private func downloadItem(app: AppStoreApp, account: Account, versionID: String? = nil) async throws -> [String: Any] {
         let deviceID = try await getDeviceIdentifier()
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
-
         let podPrefix = account.pod.map { "p\($0)-" } ?? ""
-        let downloadURL = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
-
-        guard let url = URL(string: downloadURL) else {
+        guard let url = URL(string: "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)") else {
             throw LoginError.networkError
         }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         applyAppStoreHeaders(to: &request, account: account)
-
-        let payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id ?? 0
-        ]
-
-        let plistData = try PropertyListSerialization.data(
-            fromPropertyList: payload,
-            format: .xml,
-            options: 0
-        )
-        request.httpBody = plistData
-
-        logger.logRequest(request)
-        let (data, response) = try await session.data(for: request)
-
-        guard let _ = response as? HTTPURLResponse else {
-            logger.logResponse(response, data: data, error: LoginError.networkError)
-            throw LoginError.networkError
+        request.httpBody = try AppStoreDownloadProduct.body(appID: app.id ?? 0, guid: guid, versionID: versionID)
+        var bagUpdateEndpoint: URL?
+        let latestVersionID: (() async throws -> String)?
+        if app.platform == nil || app.platform == .ios || app.platform == .ipados {
+            latestVersionID = {
+                guard let country = StoreFrontCatalog.countryCode(for: account.storeFront) else {
+                    throw AppStoreDownloadProductError.missingCatalogVersion
+                }
+                var lookup = try AppStoreDownloadProduct.catalogRequest(appID: app.id ?? 0, countryCode: country)
+                lookup.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+                self.logger.logRequest(lookup)
+                let (data, response) = try await self.session.data(for: lookup)
+                self.logger.logResponse(response, data: data, error: nil)
+                guard let http = response as? HTTPURLResponse else { throw LoginError.networkError }
+                guard http.statusCode == 200 else { throw AppStoreDownloadProductError.http(http.statusCode) }
+                return try AppStoreDownloadProduct.catalogVersionID(data: data, appID: app.id ?? 0)
+            }
+        } else {
+            latestVersionID = nil
         }
-
-        logger.logResponse(response, data: data, error: nil)
-
-        let normalizedData = normalizePlistData(data)
-        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
-
-        if let failureType = plist?["failureType"] as? String {
-            if Constant.authFailureCodes.contains(failureType) {
+        do {
+            return try await AppStoreDownloadProduct.item(request: request, redownloadEndpoint: {
+                var bagRequest = URLRequest(url: URL(string: "https://\(Constant.privateInitDomain)\(Constant.privateInitPath)")!)
+                bagRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+                self.logger.logRequest(bagRequest)
+                let (data, response) = try await self.session.data(for: bagRequest)
+                self.logger.logResponse(response, data: data, error: nil)
+                guard let http = response as? HTTPURLResponse else { throw LoginError.networkError }
+                guard http.statusCode == 200 else { throw AppStoreDownloadProductError.http(http.statusCode) }
+                guard let plist = try? PropertyListSerialization.propertyList(from: self.normalizePlistData(data), format: nil) as? [String: Any],
+                      let bag = plist["urlBag"] as? [String: Any],
+                      let endpoint = bag["redownloadProduct"] as? String,
+                      let url = URL(string: endpoint) else {
+                    throw AppStoreDownloadProductError.invalidEndpoint
+                }
+                if let update = bag["updateProduct"] as? String {
+                    guard let url = URL(string: update) else { throw AppStoreDownloadProductError.invalidEndpoint }
+                    bagUpdateEndpoint = url
+                }
+                return url
+            }, latestVersionID: latestVersionID,
+               updateEndpoint: latestVersionID == nil ? nil : { bagUpdateEndpoint },
+               bundleID: app.bundleID, send: { request in
+                self.logger.logRequest(request)
+                let (data, response) = try await self.session.data(for: request)
+                self.logger.logResponse(response, data: data, error: nil)
+                return (self.normalizePlistData(data), response)
+            })
+        } catch AppStoreDownloadProductError.failure(let code, let message) {
+            if Constant.authFailureCodes.contains(code) || message == Constant.customerMessagePasswordChanged {
                 throw LoginError.tokenExpired
             }
-            if failureType == Constant.failureTypeLicenseNotFound {
-                throw LoginError.unknownError("License required")
-            }
-            if !failureType.isEmpty {
-                let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
-                throw LoginError.unknownError(customerMessage)
-            }
+            if code == Constant.failureTypeLicenseNotFound { throw LoginError.licenseRequired }
+            throw AppStoreDownloadProductError.failure(code: code, message: message)
         }
     }
 
     private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil) async throws -> DownloadOutput {
-        let deviceID = try await getDeviceIdentifier()
-        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
-
-        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
-        let downloadURL = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
-
-        guard let url = URL(string: downloadURL) else {
-            throw LoginError.networkError
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        applyAppStoreHeaders(to: &request, account: account)
-
-        var payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id ?? 0
-        ]
-        if let versionId = externalVersionId {
-            payload["externalVersionId"] = versionId
-        }
-
-        let plistData = try PropertyListSerialization.data(
-            fromPropertyList: payload,
-            format: .xml,
-            options: 0
-        )
-        request.httpBody = plistData
-
-        logger.logRequest(request)
-        let (data, response) = try await session.data(for: request)
-
-        guard let _ = response as? HTTPURLResponse else {
-            logger.logResponse(response, data: data, error: LoginError.networkError)
-            throw LoginError.networkError
-        }
-
-        logger.logResponse(response, data: data, error: nil)
-
-        let normalizedData = normalizePlistData(data)
-        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
-
-        guard let items = plist?["songList"] as? [[String: Any]],
-              let firstItem = items.first,
-              let downloadURLString = firstItem["URL"] as? String,
-              let downloadURL = URL(string: downloadURLString) else {
-            throw LoginError.unknownError("Invalid download response")
+        let firstItem = try await downloadItem(app: app, account: account, versionID: externalVersionId)
+        guard let downloadURLString = firstItem["URL"] as? String,
+              let downloadURL = URL(string: downloadURLString),
+              ["https", "http"].contains(downloadURL.scheme ?? ""), downloadURL.host != nil else {
+            throw AppStoreDownloadProductError.invalidResponse
         }
 
         let sinfsRaw = firstItem["sinfs"] as? [Any] ?? []
@@ -720,52 +603,7 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - List Versions
     func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput {
-        let deviceID = try await getDeviceIdentifier()
-        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
-
-        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
-        let urlString = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
-
-        guard let url = URL(string: urlString) else {
-            throw LoginError.networkError
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        applyAppStoreHeaders(to: &request, account: account)
-
-        let payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id ?? 0
-        ]
-
-        let plistData = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
-        request.httpBody = plistData
-
-        logger.logRequest(request)
-        let (data, response) = try await session.data(for: request)
-        logger.logResponse(response, data: data, error: nil)
-
-        let normalizedData = normalizePlistData(data)
-        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
-
-        if let failureType = plist?["failureType"] as? String, !failureType.isEmpty {
-            if Constant.authFailureCodes.contains(failureType) {
-                throw LoginError.tokenExpired
-            }
-            if failureType == Constant.failureTypeLicenseNotFound {
-                throw LoginError.licenseRequired
-            }
-            let customerMessage = plist?["customerMessage"] as? String ?? "Unknown error"
-            throw LoginError.unknownError(customerMessage)
-        }
-
-        guard let items = plist?["songList"] as? [[String: Any]],
-              let firstItem = items.first else {
-            throw LoginError.unknownError("Invalid response from App Store")
-        }
-
+        let firstItem = try await downloadItem(app: app, account: account)
         let metadata = firstItem["metadata"] as? [String: Any] ?? [:]
 
         guard let rawIds = metadata["softwareVersionExternalIdentifiers"] as? [Any] else {
@@ -780,40 +618,8 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Fetch Version Display Name
     func fetchVersionDisplayName(app: AppStoreApp, account: Account, versionId: String) async throws -> VersionDisplayInfo {
-        let deviceID = try await getDeviceIdentifier()
-        let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
-
-        let podPrefix = account.pod.map { "p\($0)-" } ?? ""
-        let urlString = "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)"
-
-        guard let url = URL(string: urlString) else { throw LoginError.networkError }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        applyAppStoreHeaders(to: &request, account: account)
-
-        let payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id ?? 0,
-            "externalVersionId": versionId
-        ]
-        request.httpBody = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
-
-        let (data, _) = try await session.data(for: request)
-        let normalizedData = normalizePlistData(data)
-        let plist = try PropertyListSerialization.propertyList(from: normalizedData, options: [], format: nil) as? [String: Any]
-
-        if let failureType = plist?["failureType"] as? String, !failureType.isEmpty {
-            if Constant.authFailureCodes.contains(failureType) {
-                throw LoginError.tokenExpired
-            }
-            throw LoginError.unknownError(failureType)
-        }
-
-        guard let items = plist?["songList"] as? [[String: Any]],
-              let firstItem = items.first,
-              let metadata = firstItem["metadata"] as? [String: Any] else {
+        let firstItem = try await downloadItem(app: app, account: account, versionID: versionId)
+        guard let metadata = firstItem["metadata"] as? [String: Any] else {
             throw LoginError.unknownError("No metadata in response")
         }
 
@@ -1236,8 +1042,6 @@ private extension AppStoreService {
         static let failureTypeSignInRequired = "2042"
         static let failureTypeDeviceVerificationFailed = "1008"
         static let failureTypeLicenseNotFound = "9610"
-        static let failureTypeLicenseAlreadyExists = "5002"
-        static let failureTypeTemporarilyUnavailable = "2059"
         // Apple transient server error during auth — safe to retry with a fresh session
         static let failureTypeTransientError = "5005"
 
@@ -1264,8 +1068,6 @@ private extension AppStoreService {
         static let privateInitDomain = "init." + iTunesAPIDomain
         static let privateInitPath = "/bag.xml"
 
-        static let pricingParameterAppStore = "STDQ"
-        static let pricingParameterAppleArcade = "GAME"
         static let defaultUserAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
     }
 }

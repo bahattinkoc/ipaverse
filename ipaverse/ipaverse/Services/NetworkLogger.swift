@@ -20,7 +20,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
     /// "iCloud-DSID", and "token" also catches "passwordToken" / "idmsToken".
     private let sensitiveKeyPatterns: [String] = [
         "password", "token", "pet", "spd", "authcode", "securitycode",
-        "dsid", "directoryservicesid", "actionsignature", "secret",
+        "dsid", "dspersonid", "directoryservicesid", "actionsignature", "secret",
         "identitytoken", "authorization", "cookie", "setcookie", "xappleimd"
     ]
 
@@ -157,7 +157,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
         } else if let dict = value as? [String: String] {
             var result: [String: String] = [:]
             for (key, val) in dict {
-                result[key] = isSensitiveKey(key) ? redactedPlaceholder : val
+                result[key] = isSensitiveKey(key) ? redactedPlaceholder : redactEmbeddedURLs(in: val)
             }
             return result
         } else if let array = value as? [Any] {
@@ -166,14 +166,30 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
             return ["byteCount": data.count, "note": "Binary data omitted"]
         } else if let date = value as? Date {
             return ISO8601DateFormatter().string(from: date)
+        } else if let string = value as? String {
+            return redactEmbeddedURLs(in: string)
         }
         return value
+    }
+
+    /// Apple can embed credential-bearing action URLs in plist dialogs and headers.
+    /// Omit all query/fragment values, including unknown token names and XML-escaped queries.
+    private func redactEmbeddedURLs(in text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>"\\]+"#, options: .caseInsensitive) else { return text }
+        let original = text as NSString
+        var result = text
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
+            let url = original.substring(with: match.range)
+            let sanitized = String(url.prefix { $0 != "?" && $0 != "#" })
+            result = (result as NSString).replacingCharacters(in: match.range, with: sanitized)
+        }
+        return result
     }
 
     /// Redacts sensitive values embedded in raw (unparsed) text bodies, covering both
     /// XML plist `<key>k</key><string>v</string>` pairs and `key=value&...` form-encoded pairs.
     private func redactRawText(_ text: String) -> String {
-        var result = redactPlistKeyValuePairs(in: text)
+        var result = redactPlistKeyValuePairs(in: redactEmbeddedURLs(in: text))
         result = redactFormEncodedPairs(in: result)
         return result
     }

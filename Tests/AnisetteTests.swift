@@ -176,6 +176,7 @@ private final class AppleURLProtocol: URLProtocol, @unchecked Sendable {
 @main
 private enum AnisetteTests {
     static func main() async throws {
+        try loggerRedactionTests()
         try configurationTests()
         try await providerTests()
         try await clientIdentifierTests()
@@ -184,8 +185,49 @@ private enum AnisetteTests {
         try await transportTests()
         try await gsaTests()
         try await MZFinanceTests.run()
+        try await DownloadProductTests.run()
+        try await PurchaseTests.run()
         try await gsaConnectionTests()
         print("PASS: configuration, provider pinning, identity persistence, concurrent provisioning, V3 exchange, failures, cancellation, GSA and 2FA headers")
+    }
+
+    static func loggerRedactionTests() throws {
+        guard let capture = tmpfile() else { throw Failure(message: "Cannot capture logger output") }
+        fflush(stdout)
+        let savedOutput = dup(STDOUT_FILENO)
+        guard savedOutput >= 0 else {
+            fclose(capture)
+            throw Failure(message: "Cannot duplicate stdout")
+        }
+        defer {
+            fflush(stdout)
+            dup2(savedOutput, STDOUT_FILENO)
+            close(savedOutput)
+            fclose(capture)
+        }
+        try expect(dup2(fileno(capture), STDOUT_FILENO) >= 0, "Cannot redirect stdout")
+        let endpoint = URL(string: "https://store.example.invalid/buyProduct")!
+        let action = "https://store.example.invalid/editAddress?xToken=fixture-url-secret&unknownKey=fixture-query-secret#fixture-fragment-secret"
+        let body: [String: Any] = [
+            "failureType": "2022", "customerMessage": "There is a billing problem with a previous purchase.",
+            "dsPersonId": "fixture-person-secret",
+            "dialog": ["okButtonAction": ["url": action]], "links": [action]
+        ]
+        let xml = try plist(body)
+        for (type, data) in [("text/xml", xml), ("application/x-apple-plist", xml), ("application/json", try json(body))] {
+            let response = HTTPURLResponse(url: endpoint, statusCode: 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": type, "Location": action])!
+            NetworkLogger.shared.logResponse(response, data: data, error: nil)
+        }
+        fflush(stdout)
+        let handle = FileHandle(fileDescriptor: fileno(capture), closeOnDealloc: false)
+        handle.seek(toFileOffset: 0)
+        let output = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
+        for secret in ["fixture-url-secret", "fixture-query-secret", "fixture-fragment-secret", "fixture-person-secret"] {
+            try expect(!output.contains(secret), "Logger exposed a synthetic credential")
+        }
+        try expect(output.contains("2022") && output.contains("billing problem") && output.contains("editAddress"),
+                   "Logger discarded useful billing diagnostics")
     }
 
     static func configurationTests() throws {

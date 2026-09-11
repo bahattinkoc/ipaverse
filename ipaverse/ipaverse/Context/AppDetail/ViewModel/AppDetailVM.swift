@@ -38,37 +38,17 @@ final class AppDetailVM: ObservableObject {
         versionsState = .loading
         let service = AppStoreService()
         do {
-            let result = try await service.listVersions(app: app, account: account)
+            let result = try await AppStorePurchase.withLicense(operation: {
+                self.loadingMessage = "Loading versions..."
+                return try await service.listVersions(app: self.app, account: self.account)
+            }, isLicenseRequired: { ($0 as? LoginError) == .licenseRequired }, purchase: {
+                self.loadingMessage = "Acquiring free app license..."
+                try await service.purchase(app: self.app, account: self.account)
+            })
             applyVersions(result)
             await fetchDisplayNames(service: service)
-        } catch LoginError.licenseRequired {
-            await purchaseThenLoad(service: service)
-        } catch {
-            versionsState = .error(error.localizedDescription)
-            selectedVersionId = nil
-        }
-    }
-
-    private func purchaseThenLoad(service: AppStoreService) async {
-        loadingMessage = "Purchasing app..."
-        do {
-            try await service.purchase(app: app, account: account)
         } catch LoginError.tokenExpired {
             await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
-            return
-        } catch {
-            let msg = error.localizedDescription
-            if !msg.contains("already exists") {
-                versionsState = .error(msg)
-                return
-            }
-        }
-
-        loadingMessage = "Loading versions..."
-        do {
-            let result = try await service.listVersions(app: app, account: account)
-            applyVersions(result)
-            await fetchDisplayNames(service: service)
         } catch {
             versionsState = .error(error.localizedDescription)
             selectedVersionId = nil
