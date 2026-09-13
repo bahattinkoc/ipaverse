@@ -35,10 +35,11 @@ struct IPAImporter {
         let date: Date
         let filePath: String
         let iconURL: String?
+        let hash: String
+        let buildVersion: String?
+        let decrypted: Bool
 
-        var identity: String {
-            "\(app.id ?? 0)_\(app.bundleID ?? "")_\(app.version ?? "")"
-        }
+
     }
 
     /// Reads the IPA's Info.plist and builds an `AppStoreApp` describing it.
@@ -69,13 +70,15 @@ struct IPAImporter {
             version: version,
             price: 0,
             iconURL: nil,
-            platform: .ios
+            platform: (plist["CFBundleSupportedPlatforms"] as? [String])?.contains("AppleTVOS") == true ? .tvos :
+                (plist["CFBundleSupportedPlatforms"] as? [String])?.contains("XROS") == true ? .visionos :
+                (plist["UIDeviceFamily"] as? [Int]) == [2] ? .ipados : .ios
         )
     }
 
-    /// Imports the IPA at `ipaURL` into SwiftData. If a record with the same identity
-    /// (`appId_bundleID_version`) already exists, its file path and date are updated
-    /// instead of inserting a duplicate. Returns the inserted/updated record so
+    /// Imports a physical file into SwiftData. Only reimporting the same file path
+    /// updates a record; another copy of the same app/version stays independent.
+    /// Returns the inserted/updated record so
     /// callers can tag it (e.g. `sourceTag`) without a second fetch.
     ///
     /// The actual file work (unzip listing, Info.plist parsing, icon
@@ -94,32 +97,24 @@ struct IPAImporter {
             let date = IPAResigner.appBuildDate(ipaPath: ipaURL.path) ?? Date()
             // Extract the embedded app icon to a local cache so the row shows it.
             // Best-effort: a missing icon must not fail the import.
-            let identity = "\(app.id ?? 0)_\(app.bundleID ?? "")_\(app.version ?? "")"
+            let identity = UUID().uuidString
             return PreparedImport(
                 app: app,
                 date: date,
                 filePath: ipaURL.path,
-                iconURL: cacheIcon(for: identity, ipaURL: ipaURL)
+                iconURL: cacheIcon(for: identity, ipaURL: ipaURL),
+                hash: try LibraryRepository.fileHash(ipaURL),
+                buildVersion: (try? IPAResigner.loadInfoPlist(ipaPath: ipaURL.path))?["CFBundleVersion"] as? String,
+                decrypted: isDecrypted(ipaURL: ipaURL)
             )
         }.value
 
-        let identity = prepared.identity
-        let descriptor = FetchDescriptor<DownloadedApp>(
-            predicate: #Predicate<DownloadedApp> { $0.id == identity }
-        )
-
-        let result: DownloadedApp
-        if let existing = try context.fetch(descriptor).first {
-            existing.filePath = prepared.filePath
-            existing.downloadDate = prepared.date
-            if let iconURLString = prepared.iconURL { existing.iconURL = iconURLString }
-            result = existing
-        } else {
-            let imported = DownloadedApp(app: prepared.app, downloadDate: prepared.date, filePath: prepared.filePath)
-            imported.iconURL = prepared.iconURL
-            context.insert(imported)
-            result = imported
-        }
+        let result = try LibraryRepository.upsertFile(app: prepared.app, filePath: prepared.filePath, context: context, hash: prepared.hash)
+        result.buildDate = prepared.date
+        result.buildVersion = prepared.buildVersion
+        result.sha256 = prepared.hash
+        if result.sourceTag != "Resigned" { result.sourceTag = prepared.decrypted ? "Decrypted" : nil }
+        if let icon = prepared.iconURL { result.iconURL = icon }
         try context.save()
         return result
     }
@@ -143,7 +138,8 @@ struct IPAImporter {
         else { return false }
 
         let binaryEntry = String(infoEntry.dropLast("Info.plist".count)) + executable
-        guard let data = try? IPAResigner.readEntry(ipaPath: ipaURL.path, entryName: binaryEntry), !data.isEmpty else {
+        guard let data = try? IPAResigner.readEntry(ipaPath: ipaURL.path, entryName: binaryEntry),
+              let magic = data.safeUInt32(at: 0), [UInt32(0xFEEDFACF), 0xCFFAEDFE, 0xFEEDFACE, 0xCEFAEDFE, 0xCAFEBABE, 0xBEBAFECA].contains(magic) else {
             return false
         }
 

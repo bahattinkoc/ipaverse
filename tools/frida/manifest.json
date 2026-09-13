@@ -1,0 +1,50 @@
+{
+  "provenance": "Bridge/bootstrap fragments preserved from ipaverse 2.4, git 01600e3. Original npm bridge version is unknown; no runtime upgrade is implied.",
+  "scripts": [
+    {
+      "name": "biometric-bypass.js",
+      "originalSHA256": "bca57e9b33d4458a232f75af4ec683528f5124c375d2998e9d898e76404afc9c",
+      "runtimeSHA256": "b3fc65cd2afd0aa0953191cf9cf55d576b322be88d2e72932174102c74c46eee"
+    },
+    {
+      "name": "class-method-tracer.js",
+      "originalSHA256": "d6707af278b3efc0a96e39aa0108187f9457661ba5466047fb6b5ba36b8e4ee9",
+      "runtimeSHA256": "3dc1fc9e10fb76743cfa03f2c1a8acd410b0ccc0cf800e5c170548cbe19c1de5"
+    },
+    {
+      "name": "jailbreak-detection-bypass.js",
+      "originalSHA256": "1900953ee1c5f83773b9f1c6b8b7022bc0c1f6688f9339de8f6bd2b1b7692fdb",
+      "runtimeSHA256": "3e926a95dcfe6e70cd2b093348214f6ebac2b2313d9010dd2d5adb297b6bc8dc"
+    },
+    {
+      "name": "keychain-dump.js",
+      "originalSHA256": "81e034b45986ed33017a05ba4bb498295d8f58db0d8017337e6010bacb52e311",
+      "runtimeSHA256": "5416bffa0c929dbfd71fee0f5c770847369cd8206399efe80ff8796bc4aacce8"
+    },
+    {
+      "name": "network-request-logger.js",
+      "originalSHA256": "7041ccb860ea2211e1e94f06fb275bdd42058d35b90f132693f41208abeea31f",
+      "runtimeSHA256": "374323aa43e3645693bbb34ff6b21ba14534f3a43c2dd9655946521fa00448e4"
+    },
+    {
+      "name": "sandbox-files.js",
+      "originalSHA256": "c3becc11fcf4fe6e98d5e8e97b9fd1616a1eb3c7bd936e2585e9383c9828ddbd",
+      "runtimeSHA256": "94e8290745b8f23e892cc3af17c4046bd6b3621c60dcd24b31df63726e732ef9"
+    },
+    {
+      "name": "ssl-pinning-bypass.js",
+      "originalSHA256": "5783880a6c666e96211e64e3d9f959f44d3df6c1a0fedb66a648de99e02d7ba2",
+      "runtimeSHA256": null
+    },
+    {
+      "name": "ui-hierarchy-dump.js",
+      "originalSHA256": "8d54613dd784949c445928938a110680bb9fe7db54fc818f59b9dd51cc00ccf0",
+      "runtimeSHA256": "36f7fc5c87175a89e5ea0a4d3971b3455e52c1568cdc88d4904a6d47f418e46e"
+    },
+    {
+      "name": "userdefaults-dump.js",
+      "originalSHA256": "553737c5443b276b38bf683b76d43a97b168b59f0f0a17333ebcd86b5b2e30a1",
+      "runtimeSHA256": "9899865493bbcacf46289d1e2dda4f72f07c68909aaeddd24f6ae12cbf624117"
+    }
+  ]
+}

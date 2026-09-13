@@ -72,10 +72,26 @@ final class DownloadedApp {
     /// downloaded/imported original — "Decrypted" (FridaDumper output) or
     /// "Resigned" (IPAResigner output). Nil for a plain download/import.
     var sourceTag: String?
+    // Optional additive fields allow a lightweight migration from the 2.4 store.
+    var parentArtifactID: String?
+    var buildVersion: String?
+    var externalVersionID: String?
+    var fileSize: Int64?
+    var sha256: String?
+    var importedAt: Date?
+    var buildDate: Date?
+
+    var artifactSource: String { sourceTag ?? (appId == 0 ? "Imported" : "Downloaded") }
+    var libraryGroupID: String { "\(platform ?? "iOS")|\(bundleID)" }
+    var supportsIPAOperations: Bool { platform != AppPlatform.macos.rawValue && URL(fileURLWithPath: filePath).pathExtension.lowercased() != "pkg" }
+    var storeApp: AppStoreApp {
+        AppStoreApp(id: appId, bundleID: bundleID, name: name, version: version, price: price,
+                    iconURL: iconURL, platform: platform.flatMap(AppPlatform.init(rawValue:)))
+    }
 
     init(app: AppStoreApp, downloadDate: Date = Date(), filePath: String, versionOverride: String? = nil) {
         let resolvedVersion = versionOverride ?? app.version ?? ""
-        self.id = "\(app.id ?? 0)_\(app.bundleID ?? "")_\(resolvedVersion)"
+        self.id = UUID().uuidString
         self.appId = app.id ?? 0
         self.bundleID = app.bundleID ?? ""
         self.name = app.name ?? ""
@@ -85,6 +101,7 @@ final class DownloadedApp {
         self.platform = app.platform?.rawValue
         self.downloadDate = downloadDate
         self.filePath = filePath
+        self.importedAt = downloadDate
     }
 }
 
@@ -108,6 +125,7 @@ struct DownloadOutput {
     let destinationPath: String
     let success: Bool
     let error: String?
+    var version: String? = nil
 }
 
 struct AppVersion: Identifiable {
@@ -116,6 +134,7 @@ struct AppVersion: Identifiable {
     var displayVersion: String?
     var releaseDate: Date?
     var minimumOSVersion: String?
+    var metadataFinished = false
 }
 
 struct VersionDisplayInfo {

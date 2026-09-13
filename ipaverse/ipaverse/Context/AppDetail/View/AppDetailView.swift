@@ -13,6 +13,7 @@ struct AppDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var loginViewModel: LoginVM
     @StateObject private var viewModel: AppDetailVM
+    @ObservedObject private var queue = DownloadQueue.shared
 
     init(app: AppStoreApp, account: Account) {
         self._viewModel = StateObject(wrappedValue: AppDetailVM(app: app, account: account))
@@ -31,9 +32,9 @@ struct AppDetailView: View {
             downloadSection
         }
         .frame(width: 380, height: 480)
-        .onAppear {
+        .task {
             viewModel.setup(modelContext: modelContext, loginViewModel: loginViewModel)
-            Task { await viewModel.loadVersions() }
+            await viewModel.loadVersions()
         }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
@@ -163,7 +164,9 @@ struct AppDetailView: View {
                     .foregroundColor(.secondary)
                 } else {
                     HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.6)
+                        if version.metadataFinished {
+                            Image(systemName: "info.circle").help("Version metadata unavailable. You can still download this build.")
+                        } else { ProgressView().scaleEffect(0.6) }
                         Text(version.id)
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
@@ -194,69 +197,35 @@ struct AppDetailView: View {
 
     private var downloadSection: some View {
         HStack(spacing: 12) {
-            downloadProgressView
+            if let job = downloadJob {
+                if job.state == .downloading || job.state == .processing {
+                    DownloadProgressView(job: job)
+                } else {
+                    HStack(spacing: 6) {
+                        if job.state == .preparing { ProgressView().controlSize(.small) }
+                        Text(job.message ?? job.state.label)
+                            .font(.caption).foregroundStyle(job.state == .failed ? .red : .secondary)
+                    }
+                }
+            } else if let message = viewModel.queuedMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
 
             Spacer()
 
             Button(action: { viewModel.initiateDownload() }) {
-                Label("Download", systemImage: "arrow.down.circle.fill")
+                Label("Add to Queue", systemImage: "arrow.down.circle.fill")
                     .font(.subheadline)
                     .fontWeight(.semibold)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(viewModel.isDownloading)
+            .disabled(downloadJob?.isPending == true)
         }
         .padding()
     }
 
-    @ViewBuilder
-    private var downloadProgressView: some View {
-        switch viewModel.downloadState {
-        case .purchasing:
-            HStack(spacing: 6) {
-                ProgressView().scaleEffect(0.75)
-                Text("Preparing...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-        case .downloading(let progress, let bytesWritten, let totalBytes):
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 3)
-                        .frame(width: 22, height: 22)
-                    Circle()
-                        .trim(from: 0, to: progress)
-                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .frame(width: 22, height: 22)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.2), value: progress)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text("\(formatBytes(bytesWritten)) / \(formatBytes(totalBytes))")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-        case .idle:
-            EmptyView()
-        }
-    }
-
-    private static let byteFormatter: ByteCountFormatter = {
-        let f = ByteCountFormatter()
-        f.allowedUnits = [.useMB, .useGB]
-        f.countStyle = .file
-        return f
-    }()
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        Self.byteFormatter.string(fromByteCount: bytes)
+    private var downloadJob: DownloadJob? {
+        guard let id = viewModel.downloadJobID else { return nil }
+        return queue.jobs.first { $0.id == id }
     }
 }

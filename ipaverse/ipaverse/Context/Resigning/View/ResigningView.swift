@@ -46,6 +46,7 @@ struct ResigningView: View {
             Task {
                 let imported = try? await IPAImporter.importIPA(at: URL(fileURLWithPath: outputPath), into: modelContext)
                 imported?.sourceTag = "Resigned"
+                imported?.parentArtifactID = viewModel.downloadedApp.id
                 try? modelContext.save()
             }
         }
@@ -68,6 +69,36 @@ struct ResigningView: View {
         }
         .sheet(isPresented: $viewModel.showIdentityMigrationSheet) {
             IdentityMigrationSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showPreflight) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Signing Readiness").font(.title2)
+                Text("Each executable needs a profile matching its bundle ID. A compatible wildcard profile can be shared.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(viewModel.extensionBundleIDs, id: \.self) { bundleID in
+                            HStack {
+                                Text(bundleID).font(.caption).textSelection(.enabled)
+                                Spacer()
+                                Button(viewModel.extensionProfiles[bundleID]?.lastPathComponent ?? "Choose Extension Profile…") {
+                                    viewModel.pickExtensionProfile(for: bundleID)
+                                }
+                            }
+                        }
+                        if viewModel.isCheckingPreflight { ProgressView("Checking profiles…") }
+                        else { PreflightChecksView(checks: viewModel.preflightChecks) }
+                    }
+                }
+                HStack {
+                    Button("Cancel") { viewModel.showPreflight = false }
+                    Button("Check Again") { viewModel.refreshPreflight() }.disabled(viewModel.isCheckingPreflight)
+                    Spacer()
+                    Button("Choose Output & Sign…") { viewModel.confirmPreflightAndSign() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isCheckingPreflight || viewModel.preflightChecks.isEmpty || viewModel.preflightChecks.contains { $0.status == .blocked })
+                }
+            }.padding(24).frame(width: 680, height: 560)
         }
     }
 

@@ -15,8 +15,9 @@ final class AppDetailVM: ObservableObject {
     @Published var versionsState: VersionsLoadState = .loading
     @Published var loadingMessage = "Loading versions..."
     @Published var selectedVersionId: String?
-    @Published var downloadState: DownloadState = .idle
+    @Published private(set) var downloadJobID: UUID?
     @Published var errorMessage: String?
+    @Published var queuedMessage: String?
 
     let app: AppStoreApp
     private let account: Account
@@ -97,17 +98,21 @@ final class AppDetailVM: ObservableObject {
 
             // As each finishes, apply it and start the next one.
             for await (id, info) in group {
+                if Task.isCancelled { group.cancelAll(); return }
                 if nextIndex < order.count {
                     addTask(for: order[nextIndex])
                     nextIndex += 1
                 }
 
-                guard let info,
-                      let index = versions.firstIndex(where: { $0.id == id }) else { continue }
-                versions[index].displayVersion = info.versionString
-                versions[index].releaseDate = info.releaseDate
-                versions[index].minimumOSVersion = info.minimumOSVersion
+                guard let index = versions.firstIndex(where: { $0.id == id }) else { continue }
+                versions[index].metadataFinished = true
+                versions[index].displayVersion = info?.versionString
+                versions[index].releaseDate = info?.releaseDate
+                versions[index].minimumOSVersion = info?.minimumOSVersion
                 versionsState = .loaded(versions)
+                if let jobID = downloadJobID, let info {
+                    DownloadQueue.shared.updateDisplayVersion(jobID, versionID: id, version: info.versionString)
+                }
             }
         }
     }
@@ -124,8 +129,8 @@ final class AppDetailVM: ObservableObject {
 
         let settings = UserDefaults.standard.data(forKey: "UserSettings")
             .flatMap { try? JSONDecoder().decode(SettingsModel.self, from: $0) }
-        let fileExtension = (settings?.defaultDownloadType ?? .ipa).rawValue
-        let versionLabel = selectedDisplayVersion ?? app.version ?? ""
+        let fileExtension = app.platform == .macos ? "pkg" : (settings?.defaultDownloadType ?? .ipa).rawValue
+        let versionLabel = selectedDisplayVersion ?? selectedVersionId ?? app.version ?? ""
         savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(versionLabel).\(fileExtension)"
 
         if let contentType = UTType(filenameExtension: fileExtension) {
@@ -145,44 +150,14 @@ final class AppDetailVM: ObservableObject {
     }
 
     private func startDownload(at url: URL) {
-        downloadState = .purchasing
-        Task {
-            do {
-                let service = AppStoreService()
-                _ = try await service.download(
-                    app: app,
-                    account: account,
-                    outputPath: url.path,
-                    externalVersionId: selectedVersionId,
-                    downloadedVersion: selectedDisplayVersion,
-                    progress: { progress, bytesWritten, totalBytes in
-                        Task { @MainActor in
-                            self.downloadState = .downloading(
-                                progress: progress,
-                                bytesWritten: bytesWritten,
-                                totalBytes: totalBytes
-                            )
-                        }
-                    },
-                    modelContext: modelContext
-                )
-                downloadState = .idle
-            } catch {
-                if let loginError = error as? LoginError, loginError == .tokenExpired {
-                    await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
-                } else {
-                    errorMessage = error.localizedDescription
-                    downloadState = .idle
-                }
+        do {
+            guard loginViewModel?.currentAccount == account else {
+                throw CocoaError(.userCancelled, userInfo: [NSLocalizedDescriptionKey: "The active account changed. Reopen this app to download it."])
             }
-        }
-    }
-
-    var isDownloading: Bool {
-        switch downloadState {
-        case .idle: return false
-        default: return true
-        }
+            downloadJobID = try DownloadQueue.shared.enqueue(app: app, account: account, destination: url,
+                versionID: selectedVersionId, displayVersion: selectedDisplayVersion)
+            queuedMessage = "Added to the queue. Open Downloaded → Queue to track progress."
+        } catch { errorMessage = error.localizedDescription }
     }
 
 }

@@ -63,23 +63,21 @@ struct ipaverseApp: App {
     // notifications between them don't integrate cleanly with SwiftUI's
     // @Query diffing/animation, causing layout glitches on insert. Sharing
     // one container's mainContext across every window avoids that entirely.
-    private let modelContainer: ModelContainer = {
-        do {
-            return try ModelContainer(for: DownloadedApp.self)
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    @StateObject private var library = LibraryStore()
 
     var body: some Scene {
         Window("ipaverse", id: "main") {
-            ContentView()
-                .environmentObject(loginViewModel)
-                .environmentObject(navigationState)
-                .fixedWindow(width: 560, height: 820)
+            Group {
+                if let container = library.container {
+                    ContentView()
+                        .environmentObject(loginViewModel)
+                        .environmentObject(navigationState)
+                        .modelContainer(container)
+                } else { LibraryRecoveryView(library: library) }
+            }
+            .frame(minWidth: 560, idealWidth: 560, minHeight: 700, idealHeight: 820)
         }
-        .windowResizability(.contentSize)
-        .modelContainer(modelContainer)
+        .defaultSize(width: 560, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Resign IPA…") {
@@ -109,15 +107,18 @@ struct ipaverseApp: App {
         }
 
         WindowGroup(id: "resign", for: String.self) { $appID in
-            ResigningWindowView(appID: appID)
-                .environmentObject(loginViewModel)
+            if let container = library.container {
+                ResigningWindowView(appID: appID)
+                    .environmentObject(loginViewModel)
+                    .modelContainer(container)
+            } else { LibraryRecoveryView(library: library) }
         }
-        .modelContainer(modelContainer)
 
         WindowGroup(id: "securityScan", for: String.self) { $appID in
-            SecurityScanWindowView(appID: appID)
+            if let container = library.container {
+                SecurityScanWindowView(appID: appID).modelContainer(container)
+            } else { LibraryRecoveryView(library: library) }
         }
-        .modelContainer(modelContainer)
 
         Settings {
             SettingsView()

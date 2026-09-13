@@ -15,10 +15,12 @@ struct DumpView: View {
 
     /// Called after the decrypted copy has been imported into Downloaded.
     var onImported: (() -> Void)?
+    private let parentArtifactID: String
 
     init(downloadedApp: DownloadedApp, onImported: (() -> Void)? = nil) {
         self._viewModel = StateObject(wrappedValue: DumpVM(downloadedApp: downloadedApp))
         self.onImported = onImported
+        self.parentArtifactID = downloadedApp.id
     }
 
     var body: some View {
@@ -127,6 +129,7 @@ struct DumpView: View {
                 Task {
                     let imported = try? await IPAImporter.importIPA(at: URL(fileURLWithPath: path), into: modelContext)
                     imported?.sourceTag = "Decrypted"
+                    imported?.parentArtifactID = parentArtifactID
                     try? modelContext.save()
                     onImported?()
                     dismiss()

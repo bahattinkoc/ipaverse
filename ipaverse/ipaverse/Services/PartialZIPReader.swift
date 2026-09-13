@@ -13,6 +13,8 @@ enum PartialZIPError: LocalizedError {
     case invalidZIPStructure
     case decompressionFailed
     case noVersionInfo
+    case resourceLimit
+    case unsupportedZIP64
 
     var errorDescription: String? {
         switch self {
@@ -21,12 +23,16 @@ enum PartialZIPError: LocalizedError {
         case .invalidZIPStructure: "Invalid ZIP structure"
         case .decompressionFailed: "Decompression failed"
         case .noVersionInfo: "No version info in Info.plist"
+        case .resourceLimit: "Remote version metadata exceeds safe size limits"
+        case .unsupportedZIP64: "Version metadata uses ZIP64. Download the package to inspect its version."
         }
     }
 }
 
 struct PartialZIPReader {
 
+    private static let maxMetadataBytes = 8 * 1024 * 1024
+    private static let maxDirectoryBytes = 32 * 1024 * 1024
     let url: URL
     private let session: URLSession
 
@@ -50,6 +56,10 @@ struct PartialZIPReader {
     func readVersionMetadata() async throws -> VersionDisplayInfo {
         let fileSize = try await fetchFileSize()
         let eocd = try await findEOCD(fileSize: fileSize)
+        guard fileSize >= 22, eocd.cdOffset >= 0, eocd.cdSize > 0,
+              eocd.cdOffset <= fileSize, eocd.cdSize <= fileSize - eocd.cdOffset else { throw PartialZIPError.invalidZIPStructure }
+        guard eocd.cdOffset != Int(UInt32.max), eocd.cdSize != Int(UInt32.max) else { throw PartialZIPError.unsupportedZIP64 }
+        guard eocd.cdSize <= Self.maxDirectoryBytes else { throw PartialZIPError.resourceLimit }
         let entries = try await readCentralDirectory(offset: eocd.cdOffset, size: eocd.cdSize)
         guard let entry = entries.first(where: { isMainAppInfoPlist($0.name) }) else {
             throw PartialZIPError.infoPlistNotFound
@@ -61,19 +71,9 @@ struct PartialZIPReader {
     // MARK: - File Size
 
     private func fetchFileSize() async throws -> Int {
-        var request = URLRequest(url: url)
-        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse,
-              let contentRange = http.value(forHTTPHeaderField: "Content-Range") else {
-            throw PartialZIPError.fileNotFound
-        }
-        // "bytes 0-0/SIZE"
-        let parts = contentRange.components(separatedBy: "/")
-        guard let last = parts.last,
-              let size = Int(last.trimmingCharacters(in: .whitespaces)) else {
-            throw PartialZIPError.fileNotFound
-        }
+        let (_, response) = try await boundedRange(offset: 0, length: 1)
+        guard let contentRange = response.value(forHTTPHeaderField: "Content-Range"),
+              let size = Int(contentRange.split(separator: "/").last ?? ""), size >= 22 else { throw PartialZIPError.invalidZIPStructure }
         return size
     }
 
@@ -177,6 +177,9 @@ struct PartialZIPReader {
         let fileNameLen = Int(headerData.readUInt16LE(at: 26))
         let extraLen = Int(headerData.readUInt16LE(at: 28))
         let dataOffset = Int(entry.localHeaderOffset) + 30 + fileNameLen + extraLen
+        guard entry.compressedSize != UInt32.max, entry.uncompressedSize != UInt32.max,
+              entry.localHeaderOffset != UInt32.max else { throw PartialZIPError.unsupportedZIP64 }
+        guard entry.compressedSize <= Self.maxMetadataBytes, entry.uncompressedSize <= Self.maxMetadataBytes else { throw PartialZIPError.resourceLimit }
         let compressedData = try await rangeRequest(offset: dataOffset, length: Int(entry.compressedSize))
 
         switch entry.compressionMethod {
@@ -194,6 +197,7 @@ struct PartialZIPReader {
     private func inflateRaw(_ data: Data, uncompressedSize: Int) throws -> Data {
         guard !data.isEmpty, uncompressedSize > 0 else { return Data() }
 
+        guard uncompressedSize <= Self.maxMetadataBytes else { throw PartialZIPError.resourceLimit }
         var output = Data(count: uncompressedSize)
         var stream = z_stream()
 
@@ -214,7 +218,7 @@ struct PartialZIPReader {
         }
 
         inflateEnd(&stream)
-        guard status == Z_STREAM_END else { throw PartialZIPError.decompressionFailed }
+        guard status == Z_STREAM_END, stream.total_out == uncompressedSize else { throw PartialZIPError.decompressionFailed }
         return output
     }
 
@@ -291,23 +295,41 @@ struct PartialZIPReader {
     // MARK: - HTTP Range Request
 
     private func rangeRequest(offset: Int, length: Int) async throws -> Data {
-        guard length > 0 else { return Data() }
+        try await boundedRange(offset: offset, length: length).0
+    }
+
+    private func boundedRange(offset: Int, length: Int) async throws -> (Data, HTTPURLResponse) {
+        guard offset >= 0, length > 0, length <= Self.maxDirectoryBytes, offset <= Int.max - length else {
+            throw PartialZIPError.resourceLimit
+        }
         var request = URLRequest(url: url)
         request.setValue("bytes=\(offset)-\(offset + length - 1)", forHTTPHeaderField: "Range")
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse,
-              http.statusCode == 206 || http.statusCode == 200 else {
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+              let range = http.value(forHTTPHeaderField: "Content-Range"),
+              range.hasPrefix("bytes \(offset)-\(offset + length - 1)/"),
+              let total = Int(range.split(separator: "/").last ?? ""), total >= offset + length else {
             throw PartialZIPError.fileNotFound
         }
-        return data
+        var data = Data()
+        data.reserveCapacity(length)
+        for try await byte in bytes {
+            guard data.count < length else { throw PartialZIPError.resourceLimit }
+            data.append(byte)
+        }
+        guard data.count == length else { throw PartialZIPError.invalidZIPStructure }
+        return (data, http)
     }
+
 }
 
 // MARK: - Data little-endian helpers
 
 private extension Data {
     func readUInt32LE(at offset: Int) -> UInt32 {
-        guard offset + 4 <= count else { return 0 }
+        guard offset >= 0, offset <= count - 4 else { return 0 }
         let b0 = UInt32(self[index(startIndex, offsetBy: offset)])
         let b1 = UInt32(self[index(startIndex, offsetBy: offset + 1)])
         let b2 = UInt32(self[index(startIndex, offsetBy: offset + 2)])
@@ -316,7 +338,7 @@ private extension Data {
     }
 
     func readUInt16LE(at offset: Int) -> UInt16 {
-        guard offset + 2 <= count else { return 0 }
+        guard offset >= 0, offset <= count - 2 else { return 0 }
         let b0 = UInt16(self[index(startIndex, offsetBy: offset)])
         let b1 = UInt16(self[index(startIndex, offsetBy: offset + 1)])
         return b0 | (b1 << 8)

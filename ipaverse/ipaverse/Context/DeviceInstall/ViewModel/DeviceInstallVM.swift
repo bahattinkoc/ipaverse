@@ -19,7 +19,29 @@ final class DeviceInstallVM: ObservableObject {
     }
 
     @Published var devices: [ConnectedDevice] = []
-    @Published var selectedDevice: ConnectedDevice?
+    @Published var selectedDevice: ConnectedDevice? { didSet { refreshPreflight() } }
+    @Published var preflightChecks: [PreflightCheck] = []
+    @Published var isCheckingPreflight = false
+    private var preflightGeneration = 0
+    var preflightBlocksInstallation: Bool { isCheckingPreflight || preflightChecks.isEmpty || preflightChecks.contains { $0.status == .blocked } }
+
+    func refreshPreflight() {
+        preflightGeneration += 1
+        let generation = preflightGeneration
+        guard let device = selectedDevice else { preflightChecks = []; isCheckingPreflight = false; return }
+        isCheckingPreflight = true
+        let path = ipaPath
+        Task {
+            let checks = await Task.detached { () -> [PreflightCheck] in
+                do { return try IPAPreflight.installation(ipaPath: path, device: device) }
+                catch { return [PreflightCheck(status: .blocked, title: "Package validation", detail: error.localizedDescription)] }
+            }.value
+            guard generation == preflightGeneration else { return }
+            preflightChecks = checks
+            isCheckingPreflight = false
+        }
+    }
+
     @Published var state: State = .idle
 
     /// Minimum iOS version the IPA declares (Info.plist `MinimumOSVersion`).
@@ -178,7 +200,7 @@ final class DeviceInstallVM: ObservableObject {
     // MARK: - Install
 
     func install() {
-        guard let device = selectedDevice else { return }
+        guard let device = selectedDevice, !isInstalling, !preflightBlocksInstallation else { return }
 
         guard isCompatible(device) else {
             state = .error(
@@ -190,6 +212,7 @@ final class DeviceInstallVM: ObservableObject {
         }
 
         let path = ipaPath
+        state = .installing(message: "Checking installation readiness…")
 
         Task.detached { [weak self] in
             // Captured once, up front, as a genuine local `let` — the nested
@@ -198,6 +221,8 @@ final class DeviceInstallVM: ObservableObject {
             // what was tripping Swift 6's "captured var 'self'" diagnostic.
             guard let self else { return }
             do {
+                let blockers = try IPAPreflight.installation(ipaPath: path, device: device).filter { $0.status == .blocked }
+                guard blockers.isEmpty else { throw IPAPreflight.Failure.blocked(blockers.map { $0.title + ": " + $0.detail }.joined(separator: "\n")) }
                 switch device.backend {
                 case .coreDevice:
                     try DeviceInstaller.install(ipaPath: path, device: device) { message in

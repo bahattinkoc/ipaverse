@@ -211,6 +211,10 @@ final class FridaToolkitVM: ObservableObject {
         }
     }
     @Published private(set) var networkExchanges: [NetworkExchange] = []
+    @Published private(set) var discardedNetworkExchanges = 0
+    private var networkIndex: [String: Int] = [:]
+    private var networkTaskIndex: [String: Int] = [:]
+    private static let maxNetworkExchanges = 500
     /// ui-hierarchy-dump only — one entry per window the script reported.
     @Published private(set) var uiHierarchyWindows: [UIHierarchyWindow] = []
     /// The Data Dump scripts (userdefaults-dump/keychain-dump/sandbox-files)
@@ -268,6 +272,7 @@ final class FridaToolkitVM: ObservableObject {
 
         logLines.removeAll()
         networkExchanges.removeAll()
+        networkIndex.removeAll(); networkTaskIndex.removeAll(); discardedNetworkExchanges = 0
         uiHierarchyWindows.removeAll()
         dumpEntries.removeAll()
         sessionGeneration += 1
@@ -363,6 +368,7 @@ final class FridaToolkitVM: ObservableObject {
         if clearingData {
             logLines.removeAll()
             networkExchanges.removeAll()
+        networkIndex.removeAll(); networkTaskIndex.removeAll(); discardedNetworkExchanges = 0
             uiHierarchyWindows.removeAll()
             dumpEntries.removeAll()
         }
@@ -375,6 +381,36 @@ final class FridaToolkitVM: ObservableObject {
 
     // MARK: - Network logger
 
+    private func rebuildNetworkIndex() {
+        networkIndex = Dictionary(uniqueKeysWithValues: networkExchanges.enumerated().map { ($0.element.id, $0.offset) })
+        networkTaskIndex.removeAll(keepingCapacity: true)
+        for (index, exchange) in networkExchanges.enumerated() {
+            if let taskID = exchange.taskIdentifier { networkTaskIndex[taskID] = index }
+        }
+    }
+
+    func clearCompletedNetworkHistory() {
+        networkExchanges.removeAll { $0.state == .completed || $0.state == .dropped }
+        rebuildNetworkIndex()
+    }
+
+    /// Never evict a held request. If every slot is held, new traffic continues
+    /// unchanged in the target instead of blocking on an invisible editor.
+    private func makeNetworkRoom() -> Bool {
+        guard networkExchanges.count >= Self.maxNetworkExchanges else { return true }
+        guard let index = networkExchanges.firstIndex(where: { $0.state != .pendingRequest && $0.state != .pendingResponse }) else { return false }
+        networkExchanges.remove(at: index)
+        discardedNetworkExchanges += 1
+        rebuildNetworkIndex()
+        return true
+    }
+
+    private static func captureText(_ text: String?, limit: Int) -> String? {
+        guard let text else { return nil }
+        guard text.utf8.count > limit else { return text }
+        return String(decoding: text.utf8.prefix(limit), as: UTF8.self) + "… [capture truncated]"
+    }
+
     private func postInterceptState() {
         guard evilModeEnabled else { return }
         post(["type": "set-intercept", "enabled": interceptEnabled, "filter": interceptFilter])
@@ -386,7 +422,7 @@ final class FridaToolkitVM: ObservableObject {
     /// `request-sent`/`dropped` message `handleNetworkMessage` also applies.
     func resolvePendingRequest(_ exchange: NetworkExchange, drop: Bool) {
         guard evilModeEnabled else { return }
-        guard networkExchanges.contains(where: { $0.id == exchange.id }) else { return }
+        guard let index = networkIndex[exchange.id], networkExchanges[index].state == .pendingRequest else { return }
         var payload: [String: Any] = ["type": "resume-req-\(exchange.id)", "action": drop ? "drop" : "forward"]
         if !drop {
             payload["method"] = exchange.method
@@ -395,7 +431,7 @@ final class FridaToolkitVM: ObservableObject {
             if let body = exchange.body { payload["body"] = body }
         }
         post(payload)
-        if let idx = networkExchanges.firstIndex(where: { $0.id == exchange.id }) {
+        if let idx = networkIndex[exchange.id] {
             networkExchanges[idx].state = drop ? .dropped : .sent
         }
     }
@@ -407,7 +443,8 @@ final class FridaToolkitVM: ObservableObject {
     /// can't offer this.
     func resolvePendingResponse(_ exchange: NetworkExchange, drop: Bool) {
         guard evilModeEnabled else { return }
-        guard let idx = networkExchanges.firstIndex(where: { $0.id == exchange.id }) else { return }
+        guard let idx = networkIndex[exchange.id] else { return }
+        guard networkExchanges[idx].state == .pendingResponse else { return }
         var payload: [String: Any] = ["type": "resume-resp-\(exchange.id)", "action": drop ? "drop" : "forward"]
         if !drop {
             if let status = exchange.status { payload["status"] = String(status) }
@@ -453,7 +490,7 @@ final class FridaToolkitVM: ObservableObject {
         }
     }
 
-    private func handleNetworkMessage(_ raw: String) {
+    func handleNetworkMessage(_ raw: String) {
         guard let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let payload = obj["payload"] as? [String: Any],
@@ -466,43 +503,61 @@ final class FridaToolkitVM: ObservableObject {
             if let text = payload["text"] as? String { append("· " + text) }
         case "request-log", "request-pending":
             guard let id = payload["id"] as? String else { return }
-            let exchange = NetworkExchange(
+            guard networkIndex[id] == nil else { return }
+            let pending = type == "request-pending"
+            guard makeNetworkRoom() else {
+                if pending { post(["type": "resume-req-\(id)", "action": "continue"]) }
+                discardedNetworkExchanges += 1
+                return
+            }
+            let headers = NetworkExchange.text(from: (payload["headers"] as? [String: String]) ?? [:])
+            let oversized = headers.utf8.count > 8192 || ((payload["body"] as? String)?.utf8.count ?? 0) > 32768 || ((payload["url"] as? String)?.utf8.count ?? 0) > 4096 || ((payload["method"] as? String)?.utf8.count ?? 0) > 64
+            if pending && oversized { post(["type": "resume-req-\(id)", "action": "continue"]) }
+            var exchange = NetworkExchange(
                 id: id,
-                method: payload["method"] as? String ?? "GET",
-                url: payload["url"] as? String ?? "",
-                headers: (payload["headers"] as? [String: String]) ?? [:],
-                body: payload["body"] as? String,
-                state: type == "request-pending" ? .pendingRequest : .sent
+                method: Self.captureText(payload["method"] as? String, limit: 64) ?? "GET",
+                url: Self.captureText(payload["url"] as? String, limit: 4096) ?? "",
+                headers: [:],
+                body: Self.captureText(payload["body"] as? String, limit: 32768),
+                state: pending && !oversized ? .pendingRequest : .sent
             )
+            exchange.headersText = Self.captureText(headers, limit: 8192) ?? ""
+            networkIndex[id] = networkExchanges.count
             networkExchanges.append(exchange)
         case "request-sent":
             guard let id = payload["id"] as? String,
-                  let idx = networkExchanges.firstIndex(where: { $0.id == id }) else { return }
+                  let idx = networkIndex[id] else { return }
             networkExchanges[idx].state = .sent
             networkExchanges[idx].taskIdentifier = payload["taskIdentifier"] as? String
+            if let taskID = networkExchanges[idx].taskIdentifier { networkTaskIndex[taskID] = idx }
         case "dropped":
             guard let id = payload["id"] as? String,
-                  let idx = networkExchanges.firstIndex(where: { $0.id == id }) else { return }
+                  let idx = networkIndex[id] else { return }
             networkExchanges[idx].state = .dropped
         case "response-log", "response-pending":
-            guard let id = payload["id"] as? String,
-                  let idx = networkExchanges.firstIndex(where: { $0.id == id }) else { return }
-            networkExchanges[idx].state = type == "response-pending" ? .pendingResponse : .completed
-            networkExchanges[idx].status = (payload["status"] as? String).flatMap(Int.init)
-            networkExchanges[idx].error = payload["error"] as? String
-            networkExchanges[idx].responseBody = payload["body"] as? String
-            if let headers = payload["headers"] as? [String: String] {
-                networkExchanges[idx].responseHeadersText = NetworkExchange.text(from: headers)
+            guard let id = payload["id"] as? String else { return }
+            let pending = type == "response-pending"
+            guard let idx = networkIndex[id] else {
+                if pending { post(["type": "resume-resp-\(id)", "action": "continue"]) }
+                return
             }
+            let headers = NetworkExchange.text(from: (payload["headers"] as? [String: String]) ?? [:])
+            let oversized = headers.utf8.count > 8192 || ((payload["body"] as? String)?.utf8.count ?? 0) > 32768
+            if pending && oversized { post(["type": "resume-resp-\(id)", "action": "continue"]) }
+            networkExchanges[idx].state = pending && !oversized ? .pendingResponse : .completed
+            networkExchanges[idx].status = (payload["status"] as? String).flatMap(Int.init)
+            networkExchanges[idx].error = Self.captureText(payload["error"] as? String, limit: 4096)
+            networkExchanges[idx].responseBody = Self.captureText(payload["body"] as? String, limit: 32768)
+            networkExchanges[idx].responseHeadersText = Self.captureText(headers, limit: 8192) ?? ""
         case "response":
             // Fallback for the non-completion-handler overload only — the
             // script skips this for any task it's already reporting via
             // response-log/response-pending above.
             guard let tid = payload["taskIdentifier"] as? String,
-                  let idx = networkExchanges.firstIndex(where: { $0.taskIdentifier == tid }) else { return }
+                  let idx = networkTaskIndex[tid] else { return }
             networkExchanges[idx].state = .completed
             networkExchanges[idx].status = (payload["status"] as? String).flatMap(Int.init)
-            networkExchanges[idx].error = payload["error"] as? String
+            networkExchanges[idx].error = Self.captureText(payload["error"] as? String, limit: 4096)
         default:
             break
         }

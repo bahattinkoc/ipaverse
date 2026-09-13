@@ -28,6 +28,9 @@ struct DownloadedAppRow: View {
     /// Apple ID currently signed into ipaverse, to flag IPAs bound to another one.
     var activeAppleID: String? = nil
     let onRedownload: () -> Void
+    var canRedownload = true
+    var isFileMissing = false
+    var onLocateFile: (() -> Void)? = nil
 
     @State private var boundAppleID: String?
     @State private var didResolve = false
@@ -46,7 +49,10 @@ struct DownloadedAppRow: View {
             app: downloadedApp,
             appRowType: .downloaded(downloadState),
             onDownload: onRedownload,
-            onRedownload: onRedownload
+            onRedownload: onRedownload,
+            canRedownload: canRedownload,
+            isFileMissing: isFileMissing,
+            onLocateFile: onLocateFile
         )
         .overlay(alignment: .topTrailing) {
             if mismatch {
@@ -55,7 +61,11 @@ struct DownloadedAppRow: View {
                     .padding(.trailing, 2)
             }
         }
-        .task(id: downloadedApp.filePath) { await resolveBinding() }
+        .task(id: bindingKey) { await resolveBinding() }
+    }
+
+    private var bindingKey: String {
+        "\(downloadedApp.filePath)|\(downloadedApp.sha256 ?? "")|\(downloadedApp.downloadDate.timeIntervalSince1970)|\(isFileMissing)"
     }
 
     private var mismatchBadge: some View {
@@ -68,13 +78,17 @@ struct DownloadedAppRow: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Capsule().fill(Color.orange.opacity(0.12)))
-        .help("Bound to \(boundAppleID ?? "another Apple ID"). It will crash on launch unless the device is signed into that Apple ID.")
+        .help("Bound to \(boundAppleID ?? "another Apple ID"). The device's App Store account and license must be checked on the device.")
     }
 
     private func resolveBinding() async {
+        boundAppleID = nil
+        didResolve = false
+        guard !isFileMissing, downloadedApp.supportsIPAOperations else { return }
         let path = downloadedApp.filePath
+        let key = bindingKey
 
-        let cached = BoundAppleIDCache.resolved(path)
+        let cached = BoundAppleIDCache.resolved(key)
         if cached.isResolved {
             boundAppleID = cached.value
             didResolve = true
@@ -82,7 +96,8 @@ struct DownloadedAppRow: View {
         }
 
         let resolved = await Task.detached { IPAResigner.boundAppleID(ipaPath: path) }.value
-        BoundAppleIDCache.store(path, resolved)
+        guard !Task.isCancelled else { return }
+        BoundAppleIDCache.store(key, resolved)
         boundAppleID = resolved
         didResolve = true
     }

@@ -25,9 +25,23 @@ struct DeviceInstallView: View {
             Divider()
             content
             Divider()
+            ZStack {
+                if viewModel.isCheckingPreflight {
+                    ProgressView("Checking installation readiness…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        PreflightChecksView(checks: viewModel.preflightChecks)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                    }
+                }
+            }.frame(height: 230)
+            Divider()
             footer
         }
-        .frame(width: 420, height: 320)
+        .frame(width: 560, height: 590)
         .onAppear { Task { await viewModel.loadDevices() } }
         .alert("Different Apple ID", isPresented: $showMismatchConfirm) {
             Button("Install Anyway", role: .destructive) { viewModel.install() }
@@ -41,7 +55,7 @@ struct DeviceInstallView: View {
         let bound = viewModel.boundAppleID ?? "?"
         let active = viewModel.activeAppleID ?? "?"
         return """
-        This app was downloaded with the Apple ID \(bound). FairPlay-protected apps only launch on a device signed into that same Apple ID — installing it on a device using a different account will crash the app on launch.
+        This app was downloaded with the Apple ID \(bound). Launch may require its associated App Store license. ipaverse cannot verify the App Store account on your device.
 
         The account active in ipaverse right now is \(active).
         """
@@ -272,6 +286,7 @@ struct DeviceInstallView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
+                    viewModel.preflightBlocksInstallation ||
                     viewModel.selectedDevice == nil ||
                     viewModel.isInstalling ||
                     viewModel.devices.isEmpty ||

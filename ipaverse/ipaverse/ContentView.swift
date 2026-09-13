@@ -12,23 +12,8 @@ struct ContentView: View {
     @EnvironmentObject private var loginViewModel: LoginVM
 
     var body: some View {
-        Group {
-            if loginViewModel.isCheckingExistingSession {
-                SplashView()
-            } else {
-                switch loginViewModel.loginState {
-                case .loading, .idle, .error, .requires2FA:
-                    LoginView()
-                        .environmentObject(loginViewModel)
+        MainView(account: loginViewModel.currentAccount)
 
-                case .success(let account):
-                    MainView(account: account)
-                        .environmentObject(loginViewModel)
-                }
-            }
-        }
-        .animation(.easeInOut, value: loginViewModel.loginState)
-        .animation(.easeInOut, value: loginViewModel.isCheckingExistingSession)
     }
 }
 

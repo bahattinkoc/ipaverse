@@ -32,6 +32,7 @@ final class SearchVM: ObservableObject {
     private var effectiveAccount: Account {
         loginViewModel?.currentAccount ?? account
     }
+    private var historyObserver: NSObjectProtocol?
     private var searchTask: Task<Void, Never>?
 
     init(account: Account) {
@@ -41,7 +42,7 @@ final class SearchVM: ObservableObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        if let historyObserver { NotificationCenter.default.removeObserver(historyObserver) }
     }
 
     func setup(modelContext: ModelContext, loginViewModel: LoginVM) {
@@ -50,38 +51,24 @@ final class SearchVM: ObservableObject {
     }
 
     private func setupNotificationObserver() {
-        NotificationCenter.default.addObserver(
+        historyObserver = NotificationCenter.default.addObserver(
             forName: .searchHistoryCleared,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.searchHistory = []
+                self?.loadSearchHistory()
             }
         }
     }
 
     func loadSearchHistory() {
-        if let history = UserDefaults.standard.array(forKey: "SearchHistory") as? [String] {
-            searchHistory = Array(history.prefix(5))
-        }
+        searchHistory = SearchHistoryStore().load()
     }
 
     func saveSearchHistory() {
-        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSearch.isEmpty else { return }
-
-        var history = UserDefaults.standard.array(forKey: "SearchHistory") as? [String] ?? []
-
-        if let index = history.firstIndex(of: trimmedSearch) {
-            history.remove(at: index)
-        }
-
-        history.insert(trimmedSearch, at: 0)
-        history = Array(history.prefix(5))
-
-        UserDefaults.standard.set(history, forKey: "SearchHistory")
-        searchHistory = history
+        SearchHistoryStore().record(searchText)
+        loadSearchHistory()
     }
 
     var isLookupMode: Bool {

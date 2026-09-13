@@ -8,7 +8,9 @@
 import SwiftUI
 
 struct MainView: View {
-    let account: Account
+    let account: Account?
+    @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var queue = DownloadQueue.shared
     @EnvironmentObject var loginViewModel: LoginVM
     @EnvironmentObject private var navigationState: AppNavigationState
     @Environment(\.openWindow) private var openWindow
@@ -26,7 +28,10 @@ struct MainView: View {
                     }
                     .tag(0)
 
-                SearchView(account: account)
+                Group {
+                    if let account { SearchView(account: account).id(account.email + account.storeFront) }
+                    else { LoginView().environmentObject(loginViewModel) }
+                }
                     .tabItem {
                         Image(systemName: "magnifyingglass")
                         Text("Search")
@@ -34,6 +39,8 @@ struct MainView: View {
                     .tag(1)
             }
             .navigationTitle("ipaverse")
+            .onAppear { queue.configure(context: modelContext, account: loginViewModel.currentAccount) }
+            .onChange(of: loginViewModel.currentAccount) { _, account in queue.updateAccount(account) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {

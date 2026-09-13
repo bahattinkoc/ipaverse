@@ -12,19 +12,22 @@ import SwiftData
 final class SettingsVM: ObservableObject {
     @Published var settings: SettingsModel
     @EnvironmentObject var loginViewModel: LoginVM
+    private let defaults: UserDefaults
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.settings = SettingsModel()
         loadSettings()
     }
 
     func loadSettings() {
-        settings = SettingsModel.load()
+        settings = defaults.data(forKey: SettingsModel.storageKey)
+            .flatMap { try? JSONDecoder().decode(SettingsModel.self, from: $0) } ?? SettingsModel()
     }
 
     func saveSettings() {
         if let encoded = try? JSONEncoder().encode(settings) {
-            UserDefaults.standard.set(encoded, forKey: SettingsModel.storageKey)
+            defaults.set(encoded, forKey: SettingsModel.storageKey)
         }
     }
 
@@ -41,20 +44,12 @@ final class SettingsVM: ObservableObject {
     func toggleSearchHistory() {
         settings.searchHistoryEnabled.toggle()
         saveSettings()
+        NotificationCenter.default.post(name: .searchHistoryCleared, object: nil)
     }
 
     func clearSearchHistory() {
-        UserDefaults.standard.removeObject(forKey: "SearchHistory")
+        SearchHistoryStore(defaults: defaults).clear()
         NotificationCenter.default.post(name: .searchHistoryCleared, object: nil)
-        
-        // Clear all downloaded apps from SwiftData
-        do {
-            let context = try ModelContext(ModelContainer(for: DownloadedApp.self))
-            try context.delete(model: DownloadedApp.self)
-            try context.save()
-        } catch {
-            print("SwiftData clearing error: \(error)")
-        }
     }
 
     func selectDownloadPath() {

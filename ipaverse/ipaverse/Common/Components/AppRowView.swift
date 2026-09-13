@@ -64,6 +64,9 @@ struct AppRowView: View {
     let appRowType: AppRowType
     let onDownload: () -> Void
     let onRedownload: () -> Void
+    var canRedownload = true
+    var isFileMissing = false
+    var onLocateFile: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -78,42 +81,7 @@ struct AppRowView: View {
         .padding(.vertical, 4)
     }
 
-    @ViewBuilder
-    private var appIconView: some View {
-        Group {
-            // Imported apps store a local file URL; AsyncImage is unreliable for
-            // file:// URLs, so load those directly. Remote store icons use AsyncImage.
-            if let urlString = app.rowIconURL,
-               let url = URL(string: urlString), url.isFileURL {
-                if let nsImage = NSImage(contentsOf: url) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    iconPlaceholder
-                }
-            } else {
-                AsyncImage(url: URL(string: app.rowIconURL ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    iconPlaceholder
-                }
-            }
-        }
-        .frame(width: 50, height: 50)
-        .cornerRadius(8)
-    }
-
-    private var iconPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Color.gray.opacity(0.3))
-            .overlay(
-                Image(systemName: "app.fill")
-                    .foregroundColor(.gray)
-            )
-    }
+    private var appIconView: some View { AppListIcon(urlString: app.rowIconURL) }
 
     private var appInfoView: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -130,6 +98,10 @@ struct AppRowView: View {
                 Text("v\(app.rowVersion.isEmpty ? "-" : app.rowVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                if let copy = app as? DownloadedApp, let build = copy.buildVersion, !build.isEmpty {
+                    Text("(\(build))").font(.caption).foregroundStyle(.secondary)
+                }
 
                 if let platformRaw = app.rowPlatform, let platform = AppPlatform(rawValue: platformRaw) {
                     HStack(spacing: 4) {
@@ -185,9 +157,17 @@ struct AppRowView: View {
                 }
             case .downloaded:
                 if let downloadedApp = app as? DownloadedApp {
-                    Text(downloadedApp.downloadDate, style: .date)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        if isFileMissing {
+                            Label("File missing", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text(downloadedApp.importedAt ?? downloadedApp.downloadDate, style: .date)
+                        }
+                        Text("·")
+                        Text(URL(fileURLWithPath: downloadedApp.filePath).lastPathComponent)
+                            .lineLimit(1).truncationMode(.middle)
+                    }.font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }
@@ -207,8 +187,12 @@ struct AppRowView: View {
             switch downloadState {
             case .idle:
                 // Imported apps have no store license to re-download from.
-                if !app.rowIsImported {
-                    redownloadButton
+                if isFileMissing, let onLocateFile {
+                    Button(action: onLocateFile) { Image(systemName: "folder.badge.questionmark").font(.system(size: 20)) }
+                        .buttonStyle(.plain).foregroundStyle(.orange).help("Locate File…")
+                } else if !app.rowIsImported {
+                    redownloadButton.disabled(!canRedownload)
+                        .help(canRedownload ? "Version History…" : "Sign in to view available versions")
                 }
             default:
                 downloadStateView(downloadState, action: onRedownload)
@@ -311,4 +295,46 @@ struct AppRowView: View {
         formatter.formattingContext = .standalone
         return formatter.string(fromByteCount: bytes)
     }
+}
+
+/// Shared icon treatment for search results, saved copies and queued downloads.
+struct AppListIcon: View {
+    let urlString: String?
+
+    var body: some View {
+        Group {
+            // Imported apps store a local file URL; AsyncImage is unreliable for
+            // file:// URLs, so load those directly. Remote store icons use AsyncImage.
+            if let urlString,
+               let url = URL(string: urlString), url.isFileURL {
+                if let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    iconPlaceholder
+                }
+            } else {
+                AsyncImage(url: URL(string: urlString ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } placeholder: {
+                    iconPlaceholder
+                }
+            }
+        }
+        .frame(width: 50, height: 50)
+        .cornerRadius(8)
+    }
+
+    private var iconPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.gray.opacity(0.3))
+            .overlay(
+                Image(systemName: "app.fill")
+                    .foregroundColor(.gray)
+            )
+    }
+
 }

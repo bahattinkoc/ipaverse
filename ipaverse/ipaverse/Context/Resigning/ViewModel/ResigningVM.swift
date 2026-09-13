@@ -106,6 +106,12 @@ final class ResigningVM: ObservableObject {
         }
     }
 
+    @Published var extensionProfiles: [String: URL] = [:]
+    @Published var extensionBundleIDs: [String] = []
+    @Published var preflightChecks: [PreflightCheck] = []
+    @Published var isCheckingPreflight = false
+    @Published var showPreflight = false
+    private var preflightGeneration = 0
     @Published var certificates: [ResignerCertificate] = []
     @Published var selectedCertificate: ResignerCertificate?
     @Published var plistEntries: [PlistEntry] = []
@@ -574,6 +580,49 @@ final class ResigningVM: ObservableObject {
     // MARK: - Sign
 
     func initiateSign() {
+        showPreflight = true
+        refreshPreflight()
+    }
+
+    func pickExtensionProfile(for bundleID: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "mobileprovision") ?? .data]
+        panel.canChooseDirectories = false
+        panel.begin { result in
+            guard result == .OK, let url = panel.url else { return }
+            Task { @MainActor in self.extensionProfiles[bundleID] = url; self.refreshPreflight() }
+        }
+    }
+
+    func refreshPreflight() {
+        preflightGeneration += 1
+        let generation = preflightGeneration
+        isCheckingPreflight = true
+        let path = downloadedApp.filePath, profile = provisioningProfileURL, certificate = selectedCertificate
+        let mainID = plistEntries.first { $0.key == "CFBundleIdentifier" }?.toAny() as? String
+        let profiles = extensionProfiles
+        Task {
+            let result = await Task.detached { () -> ([IPAPreflight.BundleInfo], [PreflightCheck]) in
+                do {
+                    return (try IPAPreflight.bundles(ipaPath: path, newMainID: mainID),
+                        try IPAPreflight.signing(ipaPath: path, profileURL: profile, certificate: certificate,
+                            newMainID: mainID, extensionProfiles: profiles))
+                } catch { return ([], [PreflightCheck(status: .blocked, title: "IPA validation", detail: error.localizedDescription)]) }
+            }.value
+            guard generation == preflightGeneration else { return }
+            extensionBundleIDs = result.0.dropFirst().map(\.bundleID)
+            preflightChecks = result.1
+            isCheckingPreflight = false
+        }
+    }
+
+    func confirmPreflightAndSign() {
+        guard !isCheckingPreflight, !preflightChecks.isEmpty, !preflightChecks.contains(where: { $0.status == .blocked }) else { return }
+        showPreflight = false
+        chooseSigningOutput()
+    }
+
+    private func chooseSigningOutput() {
         guard let cert = selectedCertificate else { return }
 
         let panel = NSSavePanel()
@@ -625,10 +674,12 @@ final class ResigningVM: ObservableObject {
             enableSecurityTestingMode: enableSecurityTestingMode,
             enableFridaGadgetInjection: enableFridaGadgetInjection,
             removedFrameworks: Array(frameworksToRemove),
-            binaryStringReplacements: appliedIdentityReplacements.map { (old: $0.key, new: $0.value) }
+            binaryStringReplacements: appliedIdentityReplacements.map { (old: $0.key, new: $0.value) },
+            extensionProfiles: extensionProfiles
         )
         let ipaPath = downloadedApp.filePath
 
+        state = .signing(message: "Checking IPA…")
         Task.detached { [weak self] in
             do {
                 try IPAResigner().sign(

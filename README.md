@@ -75,9 +75,11 @@ Requirements and device-install notes:
 
 - Search the iOS, iPadOS, macOS, tvOS, and visionOS App Store catalogs and download available packages. ipaverse can acquire licenses for free apps; paid apps must already be licensed to the active Apple Account.
 - Manage multiple Apple ID accounts, switch storefronts/regions, and browse version history.
-- Import existing IPAs and keep downloaded, imported, re-signed, and decrypted copies in one library with source tags.
+- Use the library offline; group versions and original, imported, re-signed and decrypted copies, with source filters and missing-file recovery.
+- Queue individual versions or multiple apps, track two concurrent downloads, and retry interrupted jobs after restarting.
+- Compare two IPA copies: metadata, entitlements, frameworks, file hashes and static-analysis findings, with JSON export.
 - Edit IPA properties/files and re-sign DRM-free IPAs with your own certificate and provisioning profile, including from a standalone Resign window.
-- Install compatible IPAs on an iPhone or iPad over USB or Wi-Fi.
+- Review signing profiles, extension identities, and device readiness before signing or installing compatible IPAs on an iPhone or iPad over USB or Wi-Fi.
 - Run local static analysis, browse Objective-C classes, and use an authorized live Frida toolkit; manage optional external analysis tools from Settings.
 
 Full usage guide, screen by screen → **[USAGE.md](USAGE.md)**

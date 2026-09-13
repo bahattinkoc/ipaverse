@@ -1,0 +1,45 @@
+name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_workspace_tests:
+        description: Launch the isolated XCTest host on the GitHub runner
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tools/frida/package-lock.json
+      - name: Install script build dependencies
+        run: npm ci --prefix tools/frida --ignore-scripts --no-audit --no-fund
+      - name: Verify generated scripts without executing Frida
+        run: npm run check --prefix tools/frida
+      - name: Offline authentication regression suite
+        run: bash scripts/test-anisette.sh
+      - name: Compile app and workspace tests without launching them
+        run: >-
+          xcodebuild -project ipaverse/ipaverse.xcodeproj -scheme ipaverse
+          -configuration Debug -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath build/ci CODE_SIGNING_ALLOWED=NO build-for-testing
+      - name: Workspace tests (manual opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.run_workspace_tests
+        run: >-
+          xcodebuild -project ipaverse/ipaverse.xcodeproj -scheme ipaverse
+          -configuration Debug -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath build/ci CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES
+          ENABLE_HARDENED_RUNTIME=NO test

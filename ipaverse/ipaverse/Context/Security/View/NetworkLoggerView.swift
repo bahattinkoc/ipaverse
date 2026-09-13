@@ -130,7 +130,7 @@ struct NetworkLoggerView: View {
 
     // MARK: - Tab bar (Intercept vs History)
 
-    private var tabBar: some View {
+    @ViewBuilder private var tabBar: some View {
         HStack {
             Picker("", selection: $tab) {
                 Text("Intercept (\(interceptItems.count))").tag(Tab.intercept)
@@ -140,9 +140,13 @@ struct NetworkLoggerView: View {
             .labelsHidden()
             .fixedSize()
             Spacer()
+            Button("Clear Completed") { viewModel.clearCompletedNetworkHistory() }
+                .help("Held and in-flight exchanges stay in the history.")
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+        Text("Up to 500 exchanges; body capture limited to 32 KB. \(viewModel.discardedNetworkExchanges) older or excess exchanges omitted. Oversized captures continue unchanged.")
+            .font(.caption2).foregroundStyle(.secondary).padding(.horizontal)
     }
 
     // MARK: - Empty states

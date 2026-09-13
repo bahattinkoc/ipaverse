@@ -58,6 +58,7 @@ struct ResignConfig: @unchecked Sendable {
     /// See BinaryStringPatcher; each `new` must be no longer (in UTF-8 bytes)
     /// than its `old`.
     var binaryStringReplacements: [(old: String, new: String)] = []
+    var extensionProfiles: [String: URL] = [:]
 }
 
 struct IPAFileNode: Identifiable, Sendable {
@@ -333,6 +334,14 @@ struct IPAResigner {
         allowFairPlayEncrypted: Bool = false,
         progress: @escaping (String) -> Void
     ) throws {
+        guard URL(fileURLWithPath: ipaPath).standardizedFileURL != URL(fileURLWithPath: outputPath).standardizedFileURL else {
+            throw IPAPreflight.Failure.blocked("Choose a different output file to preserve the original IPA.")
+        }
+        let checks = try IPAPreflight.signing(ipaPath: ipaPath, profileURL: config.provisioningProfileURL,
+            certificate: config.certificate, newMainID: config.plistEdits["CFBundleIdentifier"] as? String,
+            extensionProfiles: config.extensionProfiles)
+        let blockers = checks.filter { $0.status == .blocked }
+        guard blockers.isEmpty else { throw IPAPreflight.Failure.blocked(blockers.map { $0.title + ": " + $0.detail }.joined(separator: "\n")) }
         let workDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: workDir) }
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
@@ -462,7 +471,8 @@ struct IPAResigner {
         let bundleID = finalPlist["CFBundleIdentifier"] as? String ?? ""
 
         // 8. Entitlements — derive from provisioning profile (no unauthorized entitlements added)
-        let profileEntitlements = (try? Self.extractEntitlements(from: profileURL)) ?? [:]
+        let signingProfile = try ProvisioningProfile.read(profileURL)
+        let profileEntitlements = signingProfile.entitlements
 
         // Team ID: extract from profile (authoritative source), not from certificate name
         let teamID: String = {
@@ -475,7 +485,7 @@ struct IPAResigner {
         }()
         print("⚙️ [IPAResigner] teamID=\(teamID) (profile: \(profileEntitlements["com.apple.developer.team-identifier"] as? String ?? "—"), cert: \(config.certificate.teamID ?? "—"))")
 
-        let entitlements = buildSigningEntitlements(from: profileEntitlements, bundleID: bundleID, teamID: teamID)
+        let entitlements = try signingProfile.signingEntitlements(bundleID: bundleID)
         let entsURL = workDir.appendingPathComponent("entitlements.plist")
         let entsData = try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0)
         try entsData.write(to: entsURL)
@@ -483,19 +493,16 @@ struct IPAResigner {
 
         // 9. Sign — inside-out: Frameworks → PlugIns/.appex → main .app
         progress("Signing...")
-        try signInsideOut(appURL: appURL, certificate: config.certificate.id,
-                          mainEntitlementsURL: entsURL, profileEntitlements: profileEntitlements,
-                          newTeamID: teamID, workDir: workDir, profileURL: profileURL)
-
-        // 10. Create new IPA
-        // -0: store without compression — binaries must not change through zip/unzip (page hash matching)
-        // -X: no macOS metadata (__MACOSX, ._* files)
+        try signInsideOut(appURL: appURL, certificate: config.certificate.id, workDir: workDir,
+                          profileURL: profileURL, extensionProfiles: config.extensionProfiles)
+        _ = try ProcessRunner.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path])
         progress("Creating IPA...")
-        try runProcess(
-            executable: "/usr/bin/zip",
-            workingDirectory: workDir,
-            arguments: ["-qrX0", outputPath, "Payload"]
-        )
+        let destination = URL(fileURLWithPath: outputPath)
+        let staged = AtomicFile.stagingURL(for: destination)
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try runProcess(executable: "/usr/bin/zip", workingDirectory: workDir, arguments: ["-qrX0", staged.path, "Payload"])
+        _ = try ProcessRunner.run("/usr/bin/unzip", ["-tqq", staged.path])
+        try AtomicFile.commit(staged, to: destination)
     }
 
     // MARK: - Private helpers
@@ -548,130 +555,50 @@ struct IPAResigner {
 
     @discardableResult
     private func runProcess(executable: String, workingDirectory: URL? = nil, arguments: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let wd = workingDirectory { process.currentDirectoryURL = wd }
-        process.useUTF8Locale()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        try process.run()
-        let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw IPAResignError.processFailure(
-                executable: executable,
-                stderr: err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? out : err
-            )
-        }
-        return out
+        String(decoding: try ProcessRunner.run(executable, arguments, directory: workingDirectory).output, as: UTF8.self)
     }
 
-    private func runProcessCapturingError(executable: String, arguments: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.useUTF8Locale()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        try process.run()
-        _ = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw IPAResignError.codesignFailed(err.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return err
-    }
-
-    private func signInsideOut(
-        appURL: URL,
-        certificate: String,
-        mainEntitlementsURL: URL,
-        profileEntitlements: [String: Any],
-        newTeamID: String,
-        workDir: URL,
-        profileURL: URL
-    ) throws {
+    private func signInsideOut(appURL: URL, certificate: String, workDir: URL,
+                               profileURL: URL, extensionProfiles: [String: URL]) throws {
         let fm = FileManager.default
-
-        // 1. Main app's Frameworks directory — sign without entitlements
-        let frameworksURL = appURL.appendingPathComponent("Frameworks")
-        if let items = try? fm.contentsOfDirectory(at: frameworksURL, includingPropertiesForKeys: nil) {
-            for item in items where item.pathExtension == "framework" || item.pathExtension == "dylib" {
-                let err = try runProcessCapturingError(executable: "/usr/bin/codesign",
-                                                       arguments: ["-f", "-s", certificate, item.path])
-                print("⚙️ [IPAResigner] codesign \(item.lastPathComponent): \(err.isEmpty ? "OK" : err)")
-            }
+        let enumerator = fm.enumerator(at: appURL, includingPropertiesForKeys: [.isDirectoryKey])
+        var targets: [URL] = []
+        while let item = enumerator?.nextObject() as? URL {
+            if ["framework", "dylib", "appex", "app", "xpc"].contains(item.pathExtension) { targets.append(item) }
         }
-
-        // 2. .appex bundles inside PlugIns — each signed with its own patched entitlements
-        let pluginsURL = appURL.appendingPathComponent("PlugIns")
-        if let appexes = try? fm.contentsOfDirectory(at: pluginsURL, includingPropertiesForKeys: nil) {
-            for appex in appexes where appex.pathExtension == "appex" {
-                // Sign appex's own Frameworks directory first if present
-                let appexFW = appex.appendingPathComponent("Frameworks")
-                if let fwItems = try? fm.contentsOfDirectory(at: appexFW, includingPropertiesForKeys: nil) {
-                    for item in fwItems where item.pathExtension == "framework" || item.pathExtension == "dylib" {
-                        let err = try runProcessCapturingError(executable: "/usr/bin/codesign",
-                                                              arguments: ["-f", "-s", certificate, item.path])
-                        print("⚙️ [IPAResigner] codesign \(item.lastPathComponent): \(err.isEmpty ? "OK" : err)")
-                    }
-                }
-                // installd requires each executable to carry its own embedded profile,
-                // not just matching entitlements — without this, install fails with
-                // "A valid provisioning profile for this executable was not found."
-                try? fm.removeItem(at: appex.appendingPathComponent("embedded.mobileprovision"))
-                try fm.copyItem(at: profileURL, to: appex.appendingPathComponent("embedded.mobileprovision"))
-
-                // Derive appex's own entitlements from the profile
-                let appexEntsURL = entitlementsURL(for: appex, profileEntitlements: profileEntitlements, newTeamID: newTeamID, workDir: workDir)
-                let err = try runProcessCapturingError(
-                    executable: "/usr/bin/codesign",
-                    arguments: ["-f", "-s", certificate, "--entitlements", appexEntsURL.path, appex.path]
-                )
-                print("⚙️ [IPAResigner] codesign \(appex.lastPathComponent): \(err.isEmpty ? "OK" : err)")
+        targets.append(appURL)
+        targets.sort { $0.pathComponents.count > $1.pathComponents.count }
+        for target in targets {
+            try Task.checkCancellation()
+            var arguments = ["-f", "-s", certificate]
+            if ["app", "appex", "xpc"].contains(target.pathExtension) {
+                let data = try Data(contentsOf: target.appendingPathComponent("Info.plist"))
+                guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                      let bundleID = plist["CFBundleIdentifier"] as? String else { throw IPAResignError.infoPlistNotFound }
+                let selectedProfile = target == appURL ? profileURL : extensionProfiles[bundleID] ?? profileURL
+                let profile = try ProvisioningProfile.read(selectedProfile)
+                let blockers = profile.checks(bundleID: bundleID, certificateID: certificate).filter { $0.status == .blocked }
+                guard blockers.isEmpty else { throw IPAPreflight.Failure.blocked(blockers.map { $0.title + ": " + $0.detail }.joined(separator: "\n")) }
+                let embedded = target.appendingPathComponent("embedded.mobileprovision")
+                if fm.fileExists(atPath: embedded.path) { try fm.removeItem(at: embedded) }
+                try fm.copyItem(at: selectedProfile, to: embedded)
+                let ents = try profile.signingEntitlements(bundleID: bundleID)
+                let entsURL = workDir.appendingPathComponent(UUID().uuidString + ".plist")
+                try PropertyListSerialization.data(fromPropertyList: ents, format: .xml, options: 0).write(to: entsURL)
+                arguments += ["--entitlements", entsURL.path]
             }
+            arguments.append(target.path)
+            _ = try ProcessRunner.run("/usr/bin/codesign", arguments)
         }
-
-        // 3. Sign the main .app last
-        let err = try runProcessCapturingError(
-            executable: "/usr/bin/codesign",
-            arguments: ["-f", "-s", certificate, "--entitlements", mainEntitlementsURL.path, appURL.path]
-        )
-        print("⚙️ [IPAResigner] codesign \(appURL.lastPathComponent): \(err.isEmpty ? "OK" : err)")
-    }
-
-    private func entitlementsURL(for bundleURL: URL, profileEntitlements: [String: Any], newTeamID: String, workDir: URL) -> URL {
-        let bundleID = (try? PropertyListSerialization.propertyList(
-            from: Data(contentsOf: bundleURL.appendingPathComponent("Info.plist")), options: [], format: nil
-        ) as? [String: Any])?["CFBundleIdentifier"] as? String ?? ""
-        let ents = buildSigningEntitlements(from: profileEntitlements, bundleID: bundleID, teamID: newTeamID)
-        let url = workDir.appendingPathComponent("ents_\(bundleURL.lastPathComponent).plist")
-        let data = (try? PropertyListSerialization.data(fromPropertyList: ents, format: .xml, options: 0)) ?? Data()
-        try? data.write(to: url)
-        return url
     }
 
     private func updateNestedBundleIDs(in appURL: URL, oldPrefix: String, newPrefix: String) {
         // iOS requires all .appex bundle IDs to start with the main bundle ID prefix.
         // Watch extensions, notification extensions, intents, etc. live under PlugIns.
         // Some apps may also contain XPCServices.
-        let searchDirs = ["PlugIns", "XPCServices"]
-        for dir in searchDirs {
-            let dirURL = appURL.appendingPathComponent(dir)
-            guard let contents = try? FileManager.default.contentsOfDirectory(
-                at: dirURL, includingPropertiesForKeys: nil
-            ) else { continue }
-            for bundleURL in contents where bundleURL.pathExtension == "appex" || bundleURL.pathExtension == "xpc" {
-                rewriteBundleID(in: bundleURL.appendingPathComponent("Info.plist"),
-                                oldPrefix: oldPrefix, newPrefix: newPrefix)
-            }
+        guard let enumerator = FileManager.default.enumerator(at: appURL, includingPropertiesForKeys: nil) else { return }
+        for case let bundleURL as URL in enumerator where ["app", "appex", "xpc"].contains(bundleURL.pathExtension) {
+            rewriteBundleID(in: bundleURL.appendingPathComponent("Info.plist"), oldPrefix: oldPrefix, newPrefix: newPrefix)
         }
     }
 
@@ -679,7 +606,7 @@ struct IPAResigner {
         guard let data = try? Data(contentsOf: plistURL),
               var plist = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
               let current = plist["CFBundleIdentifier"] as? String,
-              current.hasPrefix(oldPrefix) else { return }
+              (current == oldPrefix || current.hasPrefix(oldPrefix + ".")) else { return }
         let suffix = String(current.dropFirst(oldPrefix.count))
         plist["CFBundleIdentifier"] = newPrefix + suffix
         if let written = try? PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0) {
@@ -792,81 +719,14 @@ struct IPAResigner {
         "com.apple.developer.in-app-payments",
     ]
 
-    // Expands profile entitlements wildcards and prepares them for signing.
-    // Only entitlements authorized by the profile are used; no unauthorized keys are added.
-    private func buildSigningEntitlements(from profileEntitlements: [String: Any], bundleID: String, teamID: String) -> [String: Any] {
-        func expandWildcard(_ s: String) -> String {
-            // "TEAMID.*" → "TEAMID.bundleID"
-            s.hasSuffix(".*") ? String(s.dropLast(2)) + "." + bundleID : s
-        }
-
-        var result: [String: Any] = [:]
-
-        for (key, value) in profileEntitlements {
-            switch key {
-            case "application-identifier":
-                let raw = value as? String ?? ""
-                result[key] = expandWildcard(raw)
-            case "keychain-access-groups":
-                if let groups = value as? [String] {
-                    result[key] = groups.map(expandWildcard)
-                }
-            case "com.apple.security.application-groups":
-                if let groups = value as? [String] {
-                    result[key] = groups.map(expandWildcard)
-                }
-            case "aps-environment":
-                // Only include if present in profile; downgrade to development
-                result[key] = "development"
-            default:
-                result[key] = value
-            }
-        }
-
-        // Minimum required entitlements — fallback if profile is empty
-        if result["application-identifier"] == nil {
-            result["application-identifier"] = teamID.isEmpty ? bundleID : "\(teamID).\(bundleID)"
-        }
-        result["com.apple.developer.team-identifier"] = teamID
-        result["get-task-allow"] = true
-
-        return result
-    }
-
     // SHA1 fingerprints (uppercase hex, matching `security find-identity` / codesign -s format)
     // of every certificate embedded in the profile's DeveloperCertificates array.
     static func developerCertificateFingerprints(from profileURL: URL) -> Set<String> {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["cms", "-D", "-i", profileURL.path]
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        guard (try? process.run()) != nil else { return [] }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard let profile = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let certs = profile["DeveloperCertificates"] as? [Data] else { return [] }
-        return Set(certs.map { Insecure.SHA1.hash(data: $0).map { String(format: "%02X", $0) }.joined() })
+        (try? ProvisioningProfile.read(profileURL).certificates) ?? []
     }
 
     static func extractEntitlements(from profileURL: URL) throws -> [String: Any] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["cms", "-D", "-i", profileURL.path]
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        try process.run()
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        _ = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard let profile = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let ents = profile["Entitlements"] as? [String: Any] else { return [:] }
-        return ents
+        try ProvisioningProfile.read(profileURL).entitlements
     }
 
     private func findAppBundle(in payloadURL: URL) throws -> URL {

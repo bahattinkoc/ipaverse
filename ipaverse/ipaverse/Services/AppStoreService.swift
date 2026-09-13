@@ -24,6 +24,7 @@ protocol AppStoreServiceProtocol {
 
 final class AppStoreService: AppStoreServiceProtocol {
     private let session: URLSession
+    private let ownsSession: Bool
     private let cookieJar: HTTPCookieStorage
     private let logger = NetworkLogger.shared
 
@@ -42,17 +43,26 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
     private var pendingGSATwoFactor: PendingGSATwoFactor?
 
-    init(session: URLSession = .shared) {
-        let config = URLSessionConfiguration.default
+    init(session: URLSession? = nil, isolatedCookies: Bool = false) {
+        let config = isolatedCookies ? URLSessionConfiguration.ephemeral : URLSessionConfiguration.default
         config.httpCookieAcceptPolicy = .always
-        config.httpCookieStorage = HTTPCookieStorage.shared
+        if isolatedCookies {
+            for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.domain.hasSuffix("apple.com") || cookie.domain.hasSuffix("itunes.apple.com") {
+                config.httpCookieStorage?.setCookie(cookie)
+            }
+        } else {
+            config.httpCookieStorage = HTTPCookieStorage.shared
+        }
         config.httpShouldSetCookies = true
 
         let delegate = AppStoreURLSessionDelegate()
         self.sessionDelegate = delegate
-        self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        self.cookieJar = HTTPCookieStorage.shared
+        self.ownsSession = session == nil
+        self.session = session ?? URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        self.cookieJar = config.httpCookieStorage ?? HTTPCookieStorage.shared
     }
+
+    deinit { if ownsSession { session.invalidateAndCancel() } }
 
     // MARK: - Login
     //
@@ -376,18 +386,15 @@ final class AppStoreService: AppStoreServiceProtocol {
 
     // MARK: - Download
     func download(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, downloadedVersion: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil, modelContext: ModelContext? = nil) async throws -> DownloadOutput {
-        let result = try await AppStorePurchase.withLicense(operation: {
+        var result = try await AppStorePurchase.withLicense(operation: {
             try await self.performDownload(app: app, account: account, outputPath: outputPath, externalVersionId: externalVersionId, progress: progress)
         }, isLicenseRequired: { ($0 as? LoginError) == .licenseRequired }, purchase: {
             try await self.purchase(app: app, account: account)
         })
 
         if result.success, let modelContext {
-            if await findExistingDownloadedApp(app: app, context: modelContext) != nil {
-                await updateDownloadedApp(app: app, newFilePath: result.destinationPath, downloadedVersion: downloadedVersion, context: modelContext)
-            } else {
-                await saveDownloadedApp(app: app, filePath: result.destinationPath, downloadedVersion: downloadedVersion, context: modelContext)
-            }
+            result.version = try await LibraryRepository.recordDownload(app: app, filePath: result.destinationPath,
+                version: downloadedVersion, externalVersionID: externalVersionId, context: modelContext)
         }
 
         return result
@@ -484,121 +491,24 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
         print("🔐 [IPAPatcher] parsed sinfs: \(sinfs.count)")
 
-        let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").ipa"
+        let packageExtension = app.platform == .macos ? "pkg" : "ipa"
+        let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").\(packageExtension)"
         let destinationURL = URL(fileURLWithPath: destinationPath)
-        let downloadResponse = try await streamDownloadFile(
-            from: downloadURL,
-            to: destinationURL,
-            userAgent: Constant.defaultUserAgent,
-            dsid: account.directoryServicesID,
-            progress: progress
-        )
-        logger.logResponse(downloadResponse, data: nil, error: nil)
-
-        do {
-            try IPAPatcher().applyPatches(
-                ipaPath: destinationPath,
-                sinfs: sinfs,
-                email: account.email
-            )
-        } catch {
-            print("🔐 [IPAPatcher] patching error (download kept): \(error.localizedDescription)")
-        }
-
-        return DownloadOutput(
-            destinationPath: destinationPath,
-            success: true,
-            error: nil
-        )
-    }
-
-    private func streamDownloadFile(
-        from sourceURL: URL,
-        to destinationURL: URL,
-        userAgent: String,
-        dsid: String,
-        progress: ((Double, Int64, Int64) -> Void)?
-    ) async throws -> URLResponse {
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
-        }
-
-        let tempURL = destinationURL.deletingLastPathComponent()
-            .appendingPathComponent("\(UUID().uuidString).part")
-
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-        let fileHandle = try FileHandle(forWritingTo: tempURL)
-
-        defer {
-            try? fileHandle.close()
-            if FileManager.default.fileExists(atPath: tempURL.path) {
-                try? FileManager.default.removeItem(at: tempURL)
-            }
-        }
-
-        var request = URLRequest(url: sourceURL)
-        request.httpMethod = "GET"
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        setDSIDHeaders(dsid, on: &request)
-
-        logger.logRequest(request)
-
-        let (bytes, response) = try await session.bytes(for: request)
-
-        let totalBytes = max(response.expectedContentLength, 0)
-        var downloadedBytes: Int64 = 0
-
-        // 64 KB buffer
-        let bufferSize = 64 * 1024
-        var buffer = Data()
-        buffer.reserveCapacity(bufferSize)
-
-        // UI update throttle (her 100ms)
-        var lastProgressUpdate = Date.distantPast
-        let minUpdateInterval: TimeInterval = 0.1
-
-        if totalBytes > 0 {
-            progress?(0, 0, totalBytes)
-        }
-
-        for try await byte in bytes {
-            buffer.append(byte)
-
-            if buffer.count >= bufferSize {
-                try fileHandle.write(contentsOf: buffer)
-                downloadedBytes += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-
-                let now = Date()
-                if now.timeIntervalSince(lastProgressUpdate) >= minUpdateInterval {
-                    if totalBytes > 0 {
-                        let ratio = min(Double(downloadedBytes) / Double(totalBytes), 1.0)
-                        progress?(ratio, downloadedBytes, totalBytes)
-                    } else {
-                        progress?(0, downloadedBytes, 0)
-                    }
-                    lastProgressUpdate = now
+        var request = URLRequest(url: downloadURL)
+        request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        setDSIDHeaders(account.directoryServicesID, on: &request)
+        try await PackageDownload.fetch(request: request, session: session, destination: destinationURL, progress: progress) { staged in
+            try PackageDownload.validate(staged, isMacPackage: app.platform == .macos)
+            if app.platform != .macos {
+                do {
+                    try IPAPatcher().applyPatches(ipaPath: staged.path, sinfs: sinfs, email: account.email)
+                    try PackageDownload.validate(staged, isMacPackage: false)
+                } catch {
+                    throw PackageDownloadError.preparation(error.localizedDescription)
                 }
             }
         }
-
-        // Write remaining buffer
-        if !buffer.isEmpty {
-            try fileHandle.write(contentsOf: buffer)
-            downloadedBytes += Int64(buffer.count)
-        }
-
-        // Final progress
-        if totalBytes > 0 {
-            progress?(1.0, downloadedBytes, totalBytes)
-        } else {
-            progress?(0, downloadedBytes, 0)
-        }
-
-        try fileHandle.close()
-        try FileManager.default.moveItem(at: tempURL, to: destinationURL)
-
-        return response
+        return DownloadOutput(destinationPath: destinationPath, success: true, error: nil)
     }
 
     // MARK: - List Versions
@@ -907,59 +817,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         StoreFrontCatalog.searchCountryCode(for: storeFront)
     }
 
-    @MainActor
-    private func saveDownloadedApp(app: AppStoreApp, filePath: String, downloadedVersion: String? = nil, context: ModelContext) async {
-        do {
-            // Use the IPA's build date (matches the imported-IPA path) rather than "now",
-            // so the Downloaded list shows the app version's real date, not today's.
-            let buildDate = IPAResigner.appBuildDate(ipaPath: filePath) ?? Date()
-            let downloadedApp = DownloadedApp(app: app, downloadDate: buildDate, filePath: filePath, versionOverride: downloadedVersion)
-            context.insert(downloadedApp)
-            try context.save()
-        } catch {
-            print("❌ Failed to save downloaded app to SwiftData: \(error)")
-        }
-    }
 
-    @MainActor
-    private func findExistingDownloadedApp(app: AppStoreApp, context: ModelContext) async -> DownloadedApp? {
-        do {
-            let descriptor = FetchDescriptor<DownloadedApp>(
-                predicate: #Predicate<DownloadedApp> { downloadedApp in
-                    downloadedApp.appId == (app.id ?? 0)
-                }
-            )
-
-            let existingApps = try context.fetch(descriptor)
-            return existingApps.first
-        } catch {
-            print("❌ Failed to find existing downloaded app in SwiftData: \(error)")
-            return nil
-        }
-    }
-
-    @MainActor
-    private func updateDownloadedApp(app: AppStoreApp, newFilePath: String, downloadedVersion: String? = nil, context: ModelContext) async {
-        do {
-            let descriptor = FetchDescriptor<DownloadedApp>(
-                predicate: #Predicate<DownloadedApp> { downloadedApp in
-                    downloadedApp.appId == (app.id ?? 0)
-                }
-            )
-
-            let existingApps = try context.fetch(descriptor)
-            if let existingApp = existingApps.first {
-                existingApp.filePath = newFilePath
-                if let version = downloadedVersion {
-                    existingApp.version = version
-                    existingApp.downloadDate = IPAResigner.appBuildDate(ipaPath: newFilePath) ?? Date()
-                }
-                try context.save()
-            }
-        } catch {
-            print("❌ Failed to update downloaded app in SwiftData: \(error)")
-        }
-    }
 }
 
 // MARK: - Login Parse Result
@@ -998,9 +856,7 @@ struct LoginParseResult {
 }
 
 // MARK: - URLSession Delegate for Redirect Handling
-final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate {
-    var progressHandler: ((Double, Int64, Int64) -> Void)?
-    private var hasStartedProgress = false
+final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate {
 
     func urlSession(
         _ session: URLSession,
@@ -1017,20 +873,7 @@ final class AppStoreURLSessionDelegate: NSObject, URLSessionTaskDelegate, URLSes
         }
     }
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if !hasStartedProgress {
-            progressHandler?(0.0, 0, totalBytesExpectedToWrite)
-            hasStartedProgress = true
-        }
 
-        let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        progressHandler?(progress, totalBytesWritten, totalBytesExpectedToWrite)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        progressHandler?(1.0, 0, 0)
-        hasStartedProgress = false
-    }
 }
 
 // MARK: - CONSTANT

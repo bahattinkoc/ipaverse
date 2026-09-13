@@ -12,17 +12,33 @@
 		6B87C4A52E42B9470094875D /* libunicorn.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A42E42B9470094875C /* libunicorn.a */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A2500000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6B87C47B2E42B9450094874D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6B87C4822E42B9450094874D;
+			remoteInfo = ipaverse;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		6B87C4832E42B9450094874D /* ipaverse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ipaverse.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B87C4A02E42B9470094874D /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
 		6B87C4A22E42B9470094875A /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		6B87C4A42E42B9470094875C /* libunicorn.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libunicorn.a; path = Vendor/unicorn/lib/libunicorn.a; sourceTree = SOURCE_ROOT; };
+		A25000000000000000000001 /* WorkspaceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = WorkspaceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		6B87C4852E42B9450094874D /* ipaverse */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ipaverse;
+			sourceTree = "<group>";
+		};
+		A25000000000000000000002 /* ../Tests/Workspace */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ../Tests/Workspace;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -38,6 +54,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A25000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -45,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				6B87C4852E42B9450094874D /* ipaverse */,
+				A25000000000000000000002 /* ../Tests/Workspace */,
 				6B87C4842E42B9450094874D /* Products */,
 				6BDA00902FC323C000AAEA22 /* Recovered References */,
 			);
@@ -54,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				6B87C4832E42B9450094874D /* ipaverse.app */,
+				A25000000000000000000001 /* WorkspaceTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -93,6 +118,26 @@
 			productReference = 6B87C4832E42B9450094874D /* ipaverse.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A25000000000000000000005 /* WorkspaceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A25000000000000000000006 /* Build configuration list for PBXNativeTarget "WorkspaceTests" */;
+			buildPhases = (
+				A25000000000000000000003 /* Sources */,
+				A25000000000000000000004 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A25000000000000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A25000000000000000000002 /* ../Tests/Workspace */,
+			);
+			name = WorkspaceTests;
+			productName = WorkspaceTests;
+			productReference = A25000000000000000000001 /* WorkspaceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -123,6 +168,7 @@
 			projectRoot = "";
 			targets = (
 				6B87C4822E42B9450094874D /* ipaverse */,
+				A25000000000000000000005 /* WorkspaceTests */,
 			);
 		};
 /* End PBXProject section */
@@ -145,7 +191,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A25000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A25000000000000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6B87C4822E42B9450094874D /* ipaverse */;
+			targetProxy = A2500000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		6B87C48D2E42B9470094874D /* Debug */ = {
@@ -352,6 +413,44 @@
 			};
 			name = Release;
 		};
+		A25000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Vendor/unicorn/include",
+					"$(SRCROOT)/Vendor/frida-core/include",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bahattinkoc.ipaverse.WorkspaceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ipaverse.app/Contents/MacOS/ipaverse";
+			};
+			name = Debug;
+		};
+		A25000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Vendor/unicorn/include",
+					"$(SRCROOT)/Vendor/frida-core/include",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bahattinkoc.ipaverse.WorkspaceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ipaverse.app/Contents/MacOS/ipaverse";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -372,6 +471,15 @@
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
+		};
+		A25000000000000000000006 /* Build configuration list for PBXNativeTarget "WorkspaceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A25000000000000000000007 /* Debug */,
+				A25000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};

@@ -186,6 +186,13 @@ struct IPASecurityScanner {
         try extract(ipaPath: ipaPath, to: tmpDir)
         try validateExtractedTree(at: tmpDir)
 
+        return try scanExtracted(at: tmpDir, appName: appName, progress: progress)
+    }
+
+    /// The caller must validate the extracted tree before passing it here.
+    static func scanExtracted(at tmpDir: URL, appName: String, progress: @escaping (String) -> Void) throws -> SecurityScanResult {
+        let fm = FileManager.default
+
         let payloadURL = tmpDir.appendingPathComponent("Payload", isDirectory: true)
         guard let appURL = (try? fm.contentsOfDirectory(at: payloadURL, includingPropertiesForKeys: nil))?
             .first(where: { $0.pathExtension == "app" }) else {
@@ -214,6 +221,7 @@ struct IPASecurityScanner {
         var scannedFiles = 0
         if let enumerator = fm.enumerator(at: tmpDir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) {
             for case let url as URL in enumerator {
+                try Task.checkCancellation()
                 let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
                 guard values?.isRegularFile == true else { continue }
                 scannedFiles += 1
@@ -233,6 +241,7 @@ struct IPASecurityScanner {
         progress("Scanning app binaries…")
         let machOTargets = machOBinaries(in: appURL)
         for binURL in machOTargets {
+            try Task.checkCancellation()
             let rel = displayPath(binURL.path)
             let isMain = binURL.deletingLastPathComponent().standardizedFileURL == appURL.standardizedFileURL
             scanMachO(at: binURL, location: rel, isMainExecutable: isMain, into: acc)

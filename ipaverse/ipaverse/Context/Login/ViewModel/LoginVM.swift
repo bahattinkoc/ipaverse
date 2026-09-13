@@ -55,6 +55,10 @@ final class LoginVM: ObservableObject {
         self.appStoreService = appStoreService
 
         setupBindings()
+        if ProcessInfo.processInfo.environment["IPAVERSE_TESTING"] == "1" {
+            isCheckingExistingSession = false
+            return
+        }
         loadSavedProfiles()
         checkExistingLogin()
     }

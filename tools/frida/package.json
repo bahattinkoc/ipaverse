@@ -1,0 +1,14 @@
+{
+  "name": "ipaverse-frida-scripts",
+  "private": true,
+  "version": "2.5.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check"
+  },
+  "devDependencies": {
+    "acorn": "8.18.0",
+    "prettier": "3.9.6"
+  }
+}

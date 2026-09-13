@@ -1,6 +1,8 @@
-# Frida Toolkit scripts — pre-bundled, not hand-edited
+# Frida Toolkit scripts — generated resources
 
-`ssl-pinning-bypass.js` is plain hand-written JS (no bridge dependency).
+`ssl-pinning-bypass.js` has no bridge dependency. All resources in this directory
+are generated from committed sources under `tools/frida/src`. See the
+[build guide](../../../../tools/frida/README.md).
 
 `jailbreak-detection-bypass.js`, `biometric-bypass.js`,
 `class-method-tracer.js`, `userdefaults-dump.js`, `keychain-dump.js`,
@@ -326,28 +328,22 @@ use the new names.
 
 ## Regenerating a bundled script
 
-1. Edit the corresponding `src_*.js` (not committed here — recreate from the
-   compiled output, or from `Services/FridaScriptLibrary.swift`'s git history
-   before this change) — it should `import ObjC from 'frida-objc-bridge';` at
-   the top and reference `ObjC` normally after that.
-2. `npm install --save-dev frida-compile frida-objc-bridge` in a scratch
-   directory (needs no permanent project dependency — this is a one-time,
-   development-machine-only build step, not something ipaverse or its users
-   run).
-3. `npx frida-compile src_whatever.js -o whatever.js -B iife -T none -c -S`
-   — `-B iife` is the part that matters (produces a self-contained bundle
-   with no top-level `import`/`export`, since raw `create_script_sync` can't
-   parse those); `-c` minifies (these bundles are large mostly from the
-   duplicated bridge code, so this matters); `-T none` skips TypeScript
-   type-checking (the sources here are plain `.js`).
-4. Replace the file here with the new output. Verify it still resolves the
-   `{{CLASS_NAME}}` placeholder (for `class-method-tracer.js`) — it's inside
-   a string literal, so minification shouldn't touch it, but check anyway.
-5. Before trusting it: verify empirically, the same way this was verified
-   originally — dlopen the vendored `libfrida-core.dylib`, spawn a small
-   Foundation-linked local macOS binary (`import Foundation; Thread.sleep(...)`
-   compiled with `swiftc`) via `frida_device_spawn_sync` on the LOCAL device
-   (`FRIDA_DEVICE_TYPE_LOCAL`), attach, load the new script, resume, and
-   check the `send()` output. This doesn't need an iOS device and catches
-   issues (deprecated/renamed APIs, bridge loading) that only show up at
-   actual script-execution time, not at compile time.
+From the repository root:
+
+```sh
+npm ci --prefix tools/frida --ignore-scripts --no-audit --no-fund
+npm run build --prefix tools/frida
+npm run check --prefix tools/frida
+```
+
+Edit `tools/frida/src/*.js`. The frozen 2.4 bridge/bootstrap fragments have
+checksums in `tools/frida/manifest.json`; the original bridge package version
+is unknown. See the [source recovery and build notes](../../../../tools/frida/README.md).
+
+The runtime observations above describe earlier versions. The 2.5 build checks
+do not launch a process or validate live Frida behavior. The network logger now
+omits bodies larger than 32 KiB from IPC, retains the original NSData for forwarding,
+and accepts a `continue` action that resumes a held phase without rewriting it.
+The host retains up to 500 exchanges, preserves already-held exchanges, and
+resumes excess or oversized captures unchanged. Validate these changes manually
+on an authorized target before release, including Forward/Drop/Stop and disconnect.
