@@ -5,5 +5,6 @@
 #include <bzlib.h>
 #include "SAPUnicornShim.h"
 #include "frida-core.h"
+#import "Services/IPAAssetCatalogReader.h"
 
 #endif

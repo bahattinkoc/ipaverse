@@ -359,3 +359,18 @@ enum ClassDumper {
         return result
     }
 }
+
+extension ClassDumper {
+    /// Compare needs explicit tool failures and cancellation, rather than an empty successful dump.
+    static func comparisonDump(binary: URL) throws -> ClassDumpResult {
+        let data = try Data(contentsOf: binary, options: .mappedIfSafe)
+        guard data.safeUInt32(at: 0) == machMagic64 else { throw ClassDumperError.binaryUnreadable }
+        let output = try ProcessRunner.run("/usr/bin/otool", ["-ov", binary.path], timeout: 60).output
+        let (order, counts) = parseClassList(String(decoding: output, as: UTF8.self))
+        let classes = order.map { name in
+            let count = counts[name] ?? (instance: 0, classM: 0)
+            return ObjCClassInfo(rawName: name, displayName: name, instanceMethodCount: count.instance, classMethodCount: count.classM)
+        }
+        return ClassDumpResult(classes: classes, allSelectors: extractMethNameStrings(from: data))
+    }
+}

@@ -20,7 +20,6 @@ struct DownloadedView: View {
     @State private var selectedApp: AppStoreApp?
     @State private var installContext: IPAInstallContext?
     @State private var appToDump: DownloadedApp?
-    @State private var comparison: ComparisonInput?
     @State private var isDropTargeted = false
     @State private var importingCount = 0
     @State private var error: String?
@@ -41,7 +40,29 @@ struct DownloadedView: View {
             .sorted { ($0.apps.first?.name ?? "").localizedStandardCompare($1.apps.first?.name ?? "") == .orderedAscending }
     }
     private var selected: [DownloadedApp] { downloadedApps.filter { selection.contains($0.id) } }
-    private var canCompare: Bool { selected.count == 2 && selected.allSatisfy { $0.supportsIPAOperations && !missingPaths.contains($0.filePath) } }
+    private var canCompare: Bool {
+        selected.count == 2 && comparisonCandidates(for: selected[0]).contains { $0.id == selected[1].id }
+    }
+    private var comparisonHint: String {
+        if selected.count != 2 { return "Select two IPA copies of the same app" }
+        if selected.contains(where: { !$0.supportsIPAOperations || missingPaths.contains($0.filePath) }) {
+            return "Both IPA files must be available"
+        }
+        if selected[0].bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selected[0].bundleID != selected[1].bundleID {
+            return "Compare requires matching, non-empty bundle IDs"
+        }
+        if selected[0].filePath == selected[1].filePath { return "Select two different IPA files" }
+        return "Compare selected IPA copies"
+    }
+
+    private func comparisonCandidates(for app: DownloadedApp) -> [DownloadedApp] {
+        guard app.supportsIPAOperations, !missingPaths.contains(app.filePath),
+              !app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return downloadedApps.filter {
+            $0.id != app.id && $0.filePath != app.filePath && $0.bundleID == app.bundleID &&
+            $0.supportsIPAOperations && !missingPaths.contains($0.filePath)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,11 +92,13 @@ struct DownloadedView: View {
                 HStack {
                     Text("\(selection.count) selected").font(.caption)
                     Spacer()
+                    if !canCompare { Text(comparisonHint).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     Button {
                         guard canCompare else { return }
-                        comparison = ComparisonInput(left: selected[0].filePath, right: selected[1].filePath)
+                        openWindow(id: "comparison", value: ComparisonInput(left: selected[1].filePath, right: selected[0].filePath,
+                            leftSource: selected[1].artifactSource, rightSource: selected[0].artifactSource))
                     } label: { Label("Compare", systemImage: "square.on.square") }
-                        .disabled(!canCompare).help("Select two IPA copies to compare")
+                        .disabled(!canCompare).help(comparisonHint)
                     Button(role: .destructive) { removalIDs = selection; confirmRemoval = true } label: {
                         Label("Remove", systemImage: "trash")
                     }.help("Remove selected records; keep files on disk")
@@ -100,7 +123,6 @@ struct DownloadedView: View {
             DeviceInstallView(ipaPath: ctx.ipaPath, appName: ctx.appName, activeAppleID: loginViewModel.currentAccount?.email)
         }
         .sheet(item: $appToDump) { DumpView(downloadedApp: $0) }
-        .sheet(item: $comparison) { IPAComparisonView(input: $0) }
         .confirmationDialog("Remove selected copies from the library? Files will remain on disk.", isPresented: $confirmRemoval) {
             Button("Remove from Library", role: .destructive) {
                 for app in downloadedApps where removalIDs.contains(app.id) { modelContext.delete(app) }
@@ -182,6 +204,15 @@ struct DownloadedView: View {
 
     @ViewBuilder private func actions(_ app: DownloadedApp) -> some View {
         let available = !missingPaths.contains(app.filePath)
+        let candidates = comparisonCandidates(for: app)
+        Menu("Compare With…") {
+            ForEach(candidates) { candidate in
+                Button("\(candidate.version) (\(candidate.buildVersion ?? "—")) · \(candidate.artifactSource) · \(URL(fileURLWithPath: candidate.filePath).lastPathComponent)") {
+                    openWindow(id: "comparison", value: ComparisonInput(left: app.filePath, right: candidate.filePath,
+                        leftSource: app.artifactSource, rightSource: candidate.artifactSource))
+                }
+            }
+        }.disabled(candidates.isEmpty)
         Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.filePath)]) } label: {
             Label("Show in Finder", systemImage: "folder")
         }.disabled(!available)

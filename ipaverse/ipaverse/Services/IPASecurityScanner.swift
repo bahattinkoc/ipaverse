@@ -71,6 +71,7 @@ struct SecurityScanResult: Sendable {
     /// worth a banner — e.g. an appex that Dump can't reach).
     let totalBinariesScanned: Int
     let searchCorpus: [SearchCorpusEntry]
+    var analysisIssues: [String] = []
 
     /// Only true when decryption is inconsistent across the bundle — not
     /// merely "this hasn't been dumped" (Downloaded's own tag already says
@@ -126,6 +127,17 @@ private final class ScanAccumulator {
     var encryptedBinaryPaths = Set<String>()
     var searchCorpus: [SearchCorpusEntry] = []
     private var searchCorpusBytes = 0
+    var strictTools = false
+    var analysisIssues: [String] = []
+
+    func tool(_ path: String, _ arguments: [String]) -> Data {
+        guard strictTools else { return IPASecurityScanner.runProcess(path, arguments) }
+        do { return try ProcessRunner.run(path, arguments, timeout: 60).output }
+        catch {
+            analysisIssues.append(error.localizedDescription)
+            return Data()
+        }
+    }
 
     func add(_ f: SecurityFinding) {
         let key = "\(f.severity.rawValue)|\(f.category)|\(f.title)|\(f.location ?? "")|\(f.snippet ?? "")"
@@ -190,7 +202,7 @@ struct IPASecurityScanner {
     }
 
     /// The caller must validate the extracted tree before passing it here.
-    static func scanExtracted(at tmpDir: URL, appName: String, progress: @escaping (String) -> Void) throws -> SecurityScanResult {
+    static func scanExtracted(at tmpDir: URL, appName: String, strictTools: Bool = false, progress: @escaping (String) -> Void) throws -> SecurityScanResult {
         let fm = FileManager.default
 
         let payloadURL = tmpDir.appendingPathComponent("Payload", isDirectory: true)
@@ -199,6 +211,7 @@ struct IPASecurityScanner {
             throw SecurityScanError.appBundleNotFound
         }
         let acc = ScanAccumulator()
+        acc.strictTools = strictTools
 
         let infoPlistURL = appURL.appendingPathComponent("Info.plist")
         let infoPlist = (try? Data(contentsOf: infoPlistURL))
@@ -251,6 +264,7 @@ struct IPASecurityScanner {
         progress("Summarizing network endpoints…")
         emitNetworkFindings(acc)
 
+        try Task.checkCancellation()
         return SecurityScanResult(
             appName: appName,
             findings: acc.findings,
@@ -258,14 +272,16 @@ struct IPASecurityScanner {
             date: Date(),
             encryptedBinaries: acc.encryptedBinaryPaths.sorted(),
             totalBinariesScanned: machOTargets.count,
-            searchCorpus: acc.searchCorpus
+            searchCorpus: acc.searchCorpus,
+            analysisIssues: acc.analysisIssues
         )
     }
 
     // MARK: - Pass 1: Provisioning profile
 
     private static func scanProvisioningProfile(at url: URL, into acc: ScanAccumulator) {
-        guard let plist = decodeMobileProvision(at: url) else {
+        guard let plist = decodeMobileProvision(at: url, into: acc) else {
+            acc.analysisIssues.append("Provisioning profile could not be decoded")
             acc.add(SecurityFinding(severity: .info, category: "Provisioning",
                                     title: "Provisioning profile present but could not be decoded",
                                     detail: "embedded.mobileprovision exists but `security cms -D` failed to decode it.",
@@ -630,7 +646,7 @@ struct IPASecurityScanner {
         var asciiText: String?
         let binarySize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         if !encrypted, binarySize <= maxBinaryStringScanBytes {
-            let primary = runProcess("/usr/bin/strings", ["-a", "-n", "6", url.path])
+            let primary = acc.tool("/usr/bin/strings", ["-a", "-n", "6", url.path])
             if let out = String(data: primary, encoding: .utf8) ?? String(data: primary, encoding: .isoLatin1),
                !out.isEmpty {
                 scanText(out, location: location, source: "binary", into: acc)
@@ -639,12 +655,14 @@ struct IPASecurityScanner {
             }
 
             // Best-effort 16-bit (UTF-16LE) pass — some strings only live in this form.
-            let wide = runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", "l", url.path])
+            // Apple's strings does not support -e. Compare uses the bounded ASCII pass.
+            let wide = acc.strictTools ? Data() : runProcess("/usr/bin/strings", ["-a", "-n", "6", "-e", "l", url.path])
             if let out = String(data: wide, encoding: .utf8) ?? String(data: wide, encoding: .isoLatin1),
                !out.isEmpty {
                 scanText(out, location: location, source: "binary", into: acc)
             }
         } else if !encrypted {
+            acc.analysisIssues.append("String scan skipped for \(location): binary exceeds 512 MiB")
             acc.add(SecurityFinding(
                 severity: .info,
                 category: "Binary",
@@ -726,7 +744,7 @@ struct IPASecurityScanner {
     ]
 
     private static func scanImportedSymbols(at url: URL, location: String, into acc: ScanAccumulator) {
-        let data = runProcess("/usr/bin/nm", ["-u", url.path])
+        let data = acc.tool("/usr/bin/nm", ["-u", url.path])
         guard let out = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1),
               !out.isEmpty else { return }
         for rule in importRules where out.contains(rule.symbol) {
@@ -1020,8 +1038,8 @@ struct IPASecurityScanner {
         return (primaryData, secondaryData.load())
     }
 
-    private static func decodeMobileProvision(at url: URL) -> [String: Any]? {
-        let data = runProcess("/usr/bin/security", ["cms", "-D", "-i", url.path])
+    private static func decodeMobileProvision(at url: URL, into acc: ScanAccumulator) -> [String: Any]? {
+        let data = acc.tool("/usr/bin/security", ["cms", "-D", "-i", url.path])
         return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any]
     }
 

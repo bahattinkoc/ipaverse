@@ -120,6 +120,11 @@ struct ipaverseApp: App {
             } else { LibraryRecoveryView(library: library) }
         }
 
+        WindowGroup("Compare IPA Copies", id: "comparison", for: ComparisonInput.self) { $input in
+            if let input { IPAComparisonView(input: input) }
+        }
+        .defaultSize(width: 1200, height: 820)
+
         Settings {
             SettingsView()
                 .environmentObject(loginViewModel)

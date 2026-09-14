@@ -77,7 +77,7 @@ Requirements and device-install notes:
 - Manage multiple Apple ID accounts, switch storefronts/regions, and browse version history.
 - Use the library offline; group versions and original, imported, re-signed and decrypted copies, with source filters and missing-file recovery.
 - Queue individual versions or multiple apps, track two concurrent downloads, and retry interrupted jobs after restarting.
-- Compare two IPA copies: metadata, entitlements, frameworks, file hashes and static-analysis findings, with JSON export.
+- Compare IPA copies with matching bundle IDs: metadata, entitlements, signing, Mach-O, components, resources and findings, with A/B and line diffs. Optional deep analysis adds symbols, classes, strings and endpoint candidates; export full or filtered JSON.
 - Edit IPA properties/files and re-sign DRM-free IPAs with your own certificate and provisioning profile, including from a standalone Resign window.
 - Review signing profiles, extension identities, and device readiness before signing or installing compatible IPAs on an iPhone or iPad over USB or Wi-Fi.
 - Run local static analysis, browse Objective-C classes, and use an authorized live Frida toolkit; manage optional external analysis tools from Settings.
