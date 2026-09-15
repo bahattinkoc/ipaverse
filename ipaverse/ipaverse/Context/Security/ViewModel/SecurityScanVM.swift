@@ -68,14 +68,14 @@ final class SecurityScanVM: ObservableObject {
         let path = ipaPath
         let name = appName
 
-        Task {
+        Task { [weak self] in
             do {
                 let result = try await Self.scan(ipaPath: path, appName: name) { [weak self] step in
                     self?.state = .scanning(step: step)
                 }
-                state = .done(result)
+                self?.state = .done(result)
             } catch {
-                state = .failed(error.localizedDescription)
+                self?.state = .failed(error.localizedDescription)
             }
         }
     }

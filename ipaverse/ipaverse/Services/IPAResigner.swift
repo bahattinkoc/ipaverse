@@ -798,7 +798,10 @@ struct IPAResigner {
 
         let errorBox = ProcessDataBox()
         let errorDone = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
+        // .userInitiated, not .utility: the caller below blocks on `errorDone.wait()`
+        // at whatever (often higher) QoS it's running at, and a lower-QoS drain thread
+        // triggers a priority-inversion warning — same fix as ClassDumper's stdin writer.
+        DispatchQueue.global(qos: .userInitiated).async {
             errorBox.store(errPipe.fileHandleForReading.readDataToEndOfFile())
             errorDone.signal()
         }

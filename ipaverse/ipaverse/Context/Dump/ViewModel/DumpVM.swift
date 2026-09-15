@@ -59,14 +59,14 @@ final class DumpVM: ObservableObject {
         let name = appName
         let output = outputPath
 
-        Task {
+        Task { [weak self] in
             do {
                 try await Self.dump(ipaPath: path, appName: name, outputPath: output) { [weak self] step in
                     self?.state = .dumping(step: step)
                 }
-                state = .done(outputPath: output)
+                self?.state = .done(outputPath: output)
             } catch {
-                state = .failed(error.localizedDescription)
+                self?.state = .failed(error.localizedDescription)
             }
         }
     }
