@@ -67,15 +67,12 @@ struct ipaverseApp: App {
 
     var body: some Scene {
         Window("ipaverse", id: "main") {
-            Group {
-                if let container = library.container {
-                    ContentView()
-                        .environmentObject(loginViewModel)
-                        .environmentObject(navigationState)
-                        .modelContainer(container)
-                } else { LibraryRecoveryView(library: library) }
-            }
-            .frame(minWidth: 560, idealWidth: 560, minHeight: 700, idealHeight: 820)
+            ContentView()
+                .environmentObject(loginViewModel)
+                .environmentObject(navigationState)
+                .environmentObject(library)
+                .modelContainer(library.container)
+                .frame(minWidth: 560, idealWidth: 560, minHeight: 700, idealHeight: 820)
         }
         .defaultSize(width: 560, height: 820)
         .commands {
@@ -107,17 +104,13 @@ struct ipaverseApp: App {
         }
 
         WindowGroup(id: "resign", for: String.self) { $appID in
-            if let container = library.container {
-                ResigningWindowView(appID: appID)
-                    .environmentObject(loginViewModel)
-                    .modelContainer(container)
-            } else { LibraryRecoveryView(library: library) }
+            ResigningWindowView(appID: appID)
+                .environmentObject(loginViewModel)
+                .modelContainer(library.container)
         }
 
         WindowGroup(id: "securityScan", for: String.self) { $appID in
-            if let container = library.container {
-                SecurityScanWindowView(appID: appID).modelContainer(container)
-            } else { LibraryRecoveryView(library: library) }
+            SecurityScanWindowView(appID: appID).modelContainer(library.container)
         }
 
         WindowGroup("Compare IPA Copies", id: "comparison", for: ComparisonInput.self) { $input in

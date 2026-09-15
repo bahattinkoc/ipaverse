@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct DownloadedView: View {
     let account: Account?
     @EnvironmentObject private var loginViewModel: LoginVM
+    @EnvironmentObject private var library: LibraryStore
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
     @Query(sort: \DownloadedApp.downloadDate, order: .reverse) private var downloadedApps: [DownloadedApp]
@@ -66,6 +67,11 @@ struct DownloadedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let message = library.error {
+                LibraryWarningBanner(message: message, onRetry: { library.open() }, onShowInFinder: {
+                    if let url = library.storeURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }, onReset: { library.reset() })
+            }
             controls
             if downloadedApps.isEmpty {
                 EmptyStateView(icon: "arrow.down.circle", title: "No Downloaded Apps", message: "Apps you download or import will appear here", tone: .accent, dropHint: "or drag & drop an .ipa file here")
