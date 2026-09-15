@@ -13,6 +13,9 @@ import IOKit
 
 protocol AppStoreServiceProtocol {
     func login(credentials: LoginCredentials) async throws -> Account
+    /// Requests a fresh 2FA code for the sign-in currently awaiting one, without
+    /// repeating the SRP handshake. See `AppStoreService.resendTwoFactorCode()`.
+    func resendTwoFactorCode() async throws -> (phoneId: Int?, maskedPhone: String?)
     func hasValidTokenFormat(_ token: String) async throws -> Bool
     func logout() async throws
     func search(term: String, account: Account, limit: Int, platform: AppPlatform) async throws -> SearchResult
@@ -35,7 +38,7 @@ final class AppStoreService: AppStoreServiceProtocol {
     /// delivered via SMS (no trusted device).
     private struct PendingGSATwoFactor {
         let identityToken: String
-        let phoneId: Int?
+        var phoneId: Int?
         let email: String
         let configuration: AnisetteConfiguration
         let anisette: AnisetteSession
@@ -128,6 +131,23 @@ final class AppStoreService: AppStoreServiceProtocol {
             // message for a consistent, actionable result either way.
             throw LoginError.serviceTemporarilyUnavailable
         }
+    }
+
+    /// Requests a new 2FA code for the sign-in already awaiting one, reusing the
+    /// GrandSlam identity token from the original handshake. Resending used to go
+    /// through `login()` with a blank code, which re-ran the full SRP handshake for
+    /// what is really just "ask Apple to push/SMS the code again" — extra load on
+    /// gsa.apple.com that could itself come back rate-limited (see GitHub issue #12,
+    /// "re-sending results in an error"). This calls the trusted-device/SMS endpoint
+    /// directly instead.
+    func resendTwoFactorCode() async throws -> (phoneId: Int?, maskedPhone: String?) {
+        guard let pending = pendingGSATwoFactor else {
+            throw LoginError.unknownError("There is no pending two-factor sign-in to resend a code for.")
+        }
+        let gsa = GSAClient(session: session, anisette: pending.anisette)
+        let info = try await gsa.requestTwoFactorCode(identityToken: pending.identityToken)
+        pendingGSATwoFactor?.phoneId = info.phoneId
+        return info
     }
 
     /// Exchanges a successful GrandSlam identity for the App Store credentials
@@ -625,44 +645,57 @@ final class AppStoreService: AppStoreServiceProtocol {
         )
     }
 
+    /// Apple's MZFinance endpoint can report its own application-level transient
+    /// error (`failureType 5005`) on an otherwise well-formed, HTTP 200 response —
+    /// distinct from the HTTP-level 5xx/redirect retries `MZFinanceAuthentication.
+    /// exchange` already absorbs. Each attempt gets its own SAP bag fetch + signer,
+    /// since a 5005 has been observed to persist against a stale bag/pod pairing
+    /// (see failureTypeTransientError). Bounded at 2 attempts total, matching
+    /// GSAClient.send()'s retry budget for the equivalent GSA-side condition.
     private func authenticateMZFinance(email: String, password: String, deviceID: String, anisette: AnisetteSession) async throws -> LoginParseResult {
-        // MZFinance now requires a signed X-Apple-ActionSignature header on
-        // every authenticate request (confirmed empirically: live nodes
-        // were rejecting even well-formed, PET-authenticated requests with
-        // an empty 403 until this was added) — see SAPSigner for what
-        // actually produces it. One signer/handshake per login attempt;
-        // its `sign()` is called fresh for each retry's request body.
-        let sapSigner: SAPSigner
-        do {
-            sapSigner = try await createSAPSigner(deviceID: deviceID)
-        } catch {
-            throw LoginError.unknownError("Could not establish Apple's App Store signing session: \(error.localizedDescription)")
-        }
-        defer { sapSigner.close() }
+        let maxAttempts = 2
+        for attempt in 1...maxAttempts {
+            // MZFinance now requires a signed X-Apple-ActionSignature header on
+            // every authenticate request (confirmed empirically: live nodes
+            // were rejecting even well-formed, PET-authenticated requests with
+            // an empty 403 until this was added) — see SAPSigner for what
+            // actually produces it. One signer/handshake per attempt; its
+            // `sign()` is called fresh for each transport retry's request body.
+            let sapSigner: SAPSigner
+            do {
+                sapSigner = try await createSAPSigner(deviceID: deviceID)
+            } catch {
+                throw LoginError.unknownError("Could not establish Apple's App Store signing session: \(error.localizedDescription)")
+            }
+            defer { sapSigner.close() }
 
-        let urlString = authenticateURL(host: Constant.privateAppStoreAPIDomain, deviceID: deviceID)
-        guard let url = URL(string: urlString) else { throw LoginError.networkError }
-        let request = try MZFinanceAuthentication.makeRequest(url: url, email: email, pet: password,
-                                                             deviceID: deviceID, userAgent: Constant.defaultUserAgent)
-        let transport = AuthenticationHTTPTransport(session: session)
-        let (data, response) = try await MZFinanceAuthentication.exchange(request: request) { request in
-            var prepared = request
-            let headers = try await anisette.headers()
-            for (key, value) in headers { prepared.setValue(value, forHTTPHeaderField: key) }
-            guard let body = prepared.httpBody else { throw LoginError.networkError }
-            let signature = try sapSigner.sign(body)
-            prepared.setValue(signature.base64EncodedString(), forHTTPHeaderField: "X-Apple-ActionSignature")
-            return prepared
-        } send: { request in
-            self.logger.logRequest(request)
-            let (data, response) = try await transport.data(for: request)
-            self.logger.logResponse(response, data: data, error: nil)
-            return (data, response)
+            let urlString = authenticateURL(host: Constant.privateAppStoreAPIDomain, deviceID: deviceID)
+            guard let url = URL(string: urlString) else { throw LoginError.networkError }
+            let request = try MZFinanceAuthentication.makeRequest(url: url, email: email, pet: password,
+                                                                 deviceID: deviceID, userAgent: Constant.defaultUserAgent)
+            let transport = AuthenticationHTTPTransport(session: session)
+            let (data, response) = try await MZFinanceAuthentication.exchange(request: request) { request in
+                var prepared = request
+                let headers = try await anisette.headers()
+                for (key, value) in headers { prepared.setValue(value, forHTTPHeaderField: key) }
+                guard let body = prepared.httpBody else { throw LoginError.networkError }
+                let signature = try sapSigner.sign(body)
+                prepared.setValue(signature.base64EncodedString(), forHTTPHeaderField: "X-Apple-ActionSignature")
+                return prepared
+            } send: { request in
+                self.logger.logRequest(request)
+                let (data, response) = try await transport.data(for: request)
+                self.logger.logResponse(response, data: data, error: nil)
+                return (data, response)
+            }
+            let result = try parseLoginResponse(data: data, statusCode: response.statusCode,
+                                                authCode: nil, httpResponse: response)
+            if !result.shouldRetry { return result }
+            guard attempt < maxAttempts else { break }
+            print("🔐 [MZFinance] \(result.retryReason ?? "transient failure") on attempt \(attempt) — retrying with a fresh App Store signing session")
+            try await Task.sleep(nanoseconds: 1_500_000_000)
         }
-        let result = try parseLoginResponse(data: data, statusCode: response.statusCode,
-                                            authCode: nil, httpResponse: response)
-        guard !result.shouldRetry else { throw LoginError.serviceTemporarilyUnavailable }
-        return result
+        throw LoginError.serviceTemporarilyUnavailable
     }
 
     private func parseLoginResponse(data: Data, statusCode: Int, authCode: String?, httpResponse: HTTPURLResponse) throws -> LoginParseResult {

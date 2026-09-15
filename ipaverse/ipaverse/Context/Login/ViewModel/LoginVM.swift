@@ -130,41 +130,24 @@ final class LoginVM: ObservableObject {
         showAccountPicker = !savedProfiles.isEmpty
     }
 
+    /// Resends the 2FA code for the sign-in already awaiting one. This hits the
+    /// trusted-device/SMS endpoint directly (`AppStoreService.resendTwoFactorCode()`)
+    /// instead of re-running the whole SRP handshake through `login()` with a blank
+    /// code — that used to send a full fresh authentication to gsa.apple.com just to
+    /// ask for another code, which could itself come back rate-limited.
     func resendAuthCode() async {
         guard !isLoading else { return }
         loginState = .loading
         errorMessage = ""
         authCode = ""
 
-        let credentials = LoginCredentials(
-            email: email,
-            password: password,
-            authCode: nil,
-            rememberMe: rememberMe
-        )
-
         do {
-            let account = try await appStoreService.login(credentials: credentials)
-
-            if rememberMe {
-                try keychainService.saveCredentials(credentials)
-            }
-
-            try keychainService.saveAccount(account)
-
-            loginState = .success(account)
-            saveUserEmail()
-        } catch LoginError.twoFactorRequired(let maskedPhone) {
+            let info = try await appStoreService.resendTwoFactorCode()
             showAuthCodeField = true
             loginState = .requires2FA
-            twoFactorPhoneHint = maskedPhone
-            errorMessage = ""
-            toastMessage = maskedPhone.map { "A new verification code was sent to \($0)." }
+            twoFactorPhoneHint = info.maskedPhone
+            toastMessage = info.maskedPhone.map { "A new verification code was sent to \($0)." }
                 ?? "A new verification code was sent to your trusted devices."
-
-        } catch LoginError.invalidCredentials {
-            loginState = .error("Invalid Apple ID or password")
-            errorMessage = "Invalid Apple ID or password"
 
         } catch {
             loginState = .error(error.localizedDescription)
