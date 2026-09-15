@@ -49,10 +49,13 @@ enum DeviceTransport: Sendable {
 /// Which backend found/can install to this device. `coreDevice` (devicectl)
 /// only works for iOS 17+; `classic` (libimobiledevice, ClassicDeviceInstaller)
 /// is the fallback for iOS 16 and earlier, where devicectl can list a device
-/// but its RemoteXPC tunnel never comes up.
+/// but its RemoteXPC tunnel never comes up. `simulator` (SimulatorInstaller)
+/// installs onto a booted Simulator.app device after patching the App Store
+/// binary to look like a Simulator build — see SimulatorInstaller.
 enum DeviceInstallBackend: Sendable {
     case coreDevice
     case classic
+    case simulator
 }
 
 struct ConnectedDevice: Identifiable, Hashable, Sendable {
@@ -65,6 +68,7 @@ struct ConnectedDevice: Identifiable, Hashable, Sendable {
     let transport: DeviceTransport
     var backend: DeviceInstallBackend = .coreDevice
 
+    var isSimulator: Bool { backend == .simulator }
     var isIPhone: Bool { platform == "iOS" || platform == "iPadOS" }
     var displayModel: String { model.isEmpty ? platform : model }
 
@@ -241,15 +245,28 @@ struct DeviceInstaller {
         let udid = hw["udid"] as? String ?? ""
         guard !udid.isEmpty else { return nil }
 
+        // devicectl lists Simulator.app/DeviceHub devices alongside physical
+        // hardware since Xcode 15 (CoreDevice manages both) — they report the
+        // same platform ("iOS"/"iPadOS") as a real device, so `isIPhone` alone
+        // can't tell them apart. `hardwareProperties.reality` ("physical" vs
+        // "simulated") is the actual discriminator. A downloaded App Store IPA
+        // is an iphoneos/arm64 device binary that a plain devicectl install onto
+        // a simulator would accept but fail to launch (wrong Mach-O platform) —
+        // route these through SimulatorInstaller instead, see there for why.
+        let isSimulated = (hw["reality"] as? String) == "simulated"
+
         let name = devProps["name"] as? String ?? "Unknown Device"
         let model = hw["marketingName"] as? String ?? ""
         let osVersion = devProps["osVersionNumber"] as? String ?? ""
         let platform = hw["platform"] as? String ?? ""
         let tunnelState = conn["tunnelState"] as? String ?? ""
         let transportType = conn["transportType"] as? String ?? ""
+        let bootState = devProps["bootState"] as? String ?? ""
 
-        // Consider disconnected as available — install still works over cable
-        let isAvailable = tunnelState != "unavailable"
+        // Consider disconnected as available — install still works over cable.
+        // Simulators have no tunnel/transport at all; boot state is the signal,
+        // and it's informational only since SimulatorInstaller boots on demand.
+        let isAvailable = isSimulated ? bootState == "booted" : tunnelState != "unavailable"
 
         return ConnectedDevice(
             id: udid,
@@ -258,7 +275,8 @@ struct DeviceInstaller {
             osVersion: osVersion,
             platform: platform,
             isAvailable: isAvailable,
-            transport: DeviceTransport(rawTransportType: transportType)
+            transport: DeviceTransport(rawTransportType: transportType),
+            backend: isSimulated ? .simulator : .coreDevice
         )
     }
 }

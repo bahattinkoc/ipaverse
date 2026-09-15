@@ -11,6 +11,14 @@ struct DeviceInstallView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: DeviceInstallVM
     @State private var showMismatchConfirm = false
+    /// Height of the preflight-checks panel below the resize handle. Dragged
+    /// by the user via `resizeHandle` — the device list above absorbs the rest
+    /// of the fixed-height sheet automatically (it has no explicit height).
+    @State private var checksPanelHeight: CGFloat = 230
+    @State private var checksPanelDragStartHeight: CGFloat?
+
+    private let checksPanelMinHeight: CGFloat = 48
+    private let checksPanelMaxHeight: CGFloat = 420
 
     let appName: String
 
@@ -24,7 +32,7 @@ struct DeviceInstallView: View {
             header
             Divider()
             content
-            Divider()
+            resizeHandle
             ZStack {
                 if viewModel.isCheckingPreflight {
                     ProgressView("Checking installation readiness…")
@@ -37,7 +45,7 @@ struct DeviceInstallView: View {
                             .padding(.vertical, 10)
                     }
                 }
-            }.frame(height: 230)
+            }.frame(height: checksPanelHeight)
             Divider()
             footer
         }
@@ -49,6 +57,33 @@ struct DeviceInstallView: View {
         } message: {
             Text(mismatchMessage)
         }
+    }
+
+    /// Draggable divider between the device list and the preflight-checks
+    /// panel — drag up to grow the checks panel, down to shrink it.
+    private var resizeHandle: some View {
+        ZStack {
+            Divider()
+            Capsule()
+                .fill(Color(NSColor.tertiaryLabelColor))
+                .frame(width: 36, height: 4)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 10)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let start = checksPanelDragStartHeight ?? checksPanelHeight
+                    checksPanelDragStartHeight = start
+                    let proposed = start - value.translation.height
+                    checksPanelHeight = min(max(proposed, checksPanelMinHeight), checksPanelMaxHeight)
+                }
+                .onEnded { _ in checksPanelDragStartHeight = nil }
+        )
     }
 
     private var mismatchMessage: String {
@@ -102,7 +137,7 @@ struct DeviceInstallView: View {
             successView(deviceName: name)
         } else if viewModel.hasInstallError, let msg = viewModel.errorMessage {
             errorView(message: msg)
-        } else if viewModel.devices.isEmpty {
+        } else if !viewModel.hasAnyDevices {
             emptyView
         } else {
             deviceList
@@ -214,16 +249,58 @@ struct DeviceInstallView: View {
 
             Divider()
 
-            List(viewModel.devices, selection: $viewModel.selectedDevice) { device in
-                DeviceRow(
-                    device: device,
-                    isSelected: viewModel.selectedDevice == device,
-                    isCompatible: viewModel.isCompatible(device),
-                    requirement: viewModel.requirementNote(for: device)
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if viewModel.isCompatible(device) { viewModel.selectedDevice = device }
+            List(selection: $viewModel.selectedDevice) {
+                if viewModel.physicalDevices.isEmpty {
+                    Text("No physical iOS devices connected.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(viewModel.physicalDevices) { device in
+                        DeviceRow(
+                            device: device,
+                            isSelected: viewModel.selectedDevice == device,
+                            isCompatible: viewModel.isCompatible(device),
+                            requirement: viewModel.requirementNote(for: device)
+                        )
+                        .tag(device)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if viewModel.isCompatible(device) { viewModel.selectedDevice = device }
+                        }
+                    }
+                }
+
+                if !viewModel.simulatorDevices.isEmpty {
+                    Section {
+                        ForEach(viewModel.simulatorDevices) { device in
+                            DeviceRow(
+                                device: device,
+                                isSelected: viewModel.selectedDevice == device,
+                                isCompatible: viewModel.isCompatible(device),
+                                requirement: viewModel.requirementNote(for: device)
+                            )
+                            .tag(device)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if viewModel.isCompatible(device) { viewModel.selectedDevice = device }
+                            }
+                        }
+                    } header: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Simulators — Experimental")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            Text("Patches the app to run on Simulator. Store purchases, push notifications, and camera/Face ID-dependent apps may still not work.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(nil)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
+                        .textCase(nil)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -289,7 +366,6 @@ struct DeviceInstallView: View {
                     viewModel.preflightBlocksInstallation ||
                     viewModel.selectedDevice == nil ||
                     viewModel.isInstalling ||
-                    viewModel.devices.isEmpty ||
                     (viewModel.selectedDevice.map { !viewModel.isCompatible($0) } ?? false)
                 )
             }
@@ -309,9 +385,9 @@ private struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: device.stateIcon)
+            Image(systemName: device.isSimulator ? "apps.iphone" : device.stateIcon)
                 .font(.title3)
-                .foregroundColor(device.isAvailable && isCompatible ? .accentColor : .secondary)
+                .foregroundColor(device.isSimulator ? .purple : (device.isAvailable && isCompatible ? .accentColor : .secondary))
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -321,7 +397,7 @@ private struct DeviceRow: View {
                         .fontWeight(.medium)
                         .lineLimit(1)
                         .foregroundColor(isCompatible ? .primary : .secondary)
-                    transportBadge
+                    if device.isSimulator { simulatorBadge } else { transportBadge }
                 }
                 Text("\(device.displayModel) · iOS \(device.osVersion)")
                     .font(.caption)
@@ -367,5 +443,15 @@ private struct DeviceRow: View {
                 Capsule().fill(Color(NSColor.quaternaryLabelColor).opacity(0.5))
             )
         }
+    }
+
+    private var simulatorBadge: some View {
+        Text("SIMULATOR")
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .foregroundColor(.purple)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.purple.opacity(0.12)))
     }
 }

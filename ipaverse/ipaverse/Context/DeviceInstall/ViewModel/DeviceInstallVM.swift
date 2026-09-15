@@ -29,6 +29,15 @@ final class DeviceInstallVM: ObservableObject {
         preflightGeneration += 1
         let generation = preflightGeneration
         guard let device = selectedDevice else { preflightChecks = []; isCheckingPreflight = false; return }
+        // Simulator installs strip the provisioning profile and re-sign ad-hoc
+        // instead of using it — the profile/device-registration checks below
+        // don't apply and would just be misleading noise for this target.
+        guard !device.isSimulator else {
+            preflightChecks = [PreflightCheck(status: .warning, title: "Simulator (Experimental)",
+                detail: "ipaverse removes this app's device signature and retags its binary to run on Simulator. Store purchases, push notifications, and camera/Face ID-dependent features will not work.")]
+            isCheckingPreflight = false
+            return
+        }
         isCheckingPreflight = true
         let path = ipaPath
         Task {
@@ -135,6 +144,14 @@ final class DeviceInstallVM: ObservableObject {
         if case .error = state { state = .idle }
     }
 
+    /// Physical hardware only — the ones the main Install button/preflight
+    /// checks/selection apply to.
+    var physicalDevices: [ConnectedDevice] { devices.filter { !$0.isSimulator } }
+    /// Simulator devices — handled entirely separately (SimulatorInstaller,
+    /// `installOnSimulator`), each with its own inline Run button and state.
+    var simulatorDevices: [ConnectedDevice] { devices.filter { $0.isSimulator } }
+    var hasAnyDevices: Bool { !devices.isEmpty }
+
     /// Pick the best default selection: prefer a connected device that can run
     /// the app, then any compatible one, then any connected device.
     private func preferredDevice(from list: [ConnectedDevice]) -> ConnectedDevice? {
@@ -189,10 +206,13 @@ final class DeviceInstallVM: ObservableObject {
         }
 
         devices = result.0.filter { $0.isIPhone }
-        selectedDevice = preferredDevice(from: devices)
+        // Prefer a physical device when one's available; fall back to a
+        // simulator only if that's all there is — both install from the same
+        // selection + bottom Install button.
+        selectedDevice = preferredDevice(from: physicalDevices) ?? preferredDevice(from: simulatorDevices)
         state = .idle
 
-        if devices.isEmpty {
+        if !hasAnyDevices {
             state = .error(DeviceInstallerError.noDevicesFound.localizedDescription)
         }
     }
@@ -221,16 +241,27 @@ final class DeviceInstallVM: ObservableObject {
             // what was tripping Swift 6's "captured var 'self'" diagnostic.
             guard let self else { return }
             do {
-                let blockers = try IPAPreflight.installation(ipaPath: path, device: device).filter { $0.status == .blocked }
-                guard blockers.isEmpty else { throw IPAPreflight.Failure.blocked(blockers.map { $0.title + ": " + $0.detail }.joined(separator: "\n")) }
-                switch device.backend {
-                case .coreDevice:
-                    try DeviceInstaller.install(ipaPath: path, device: device) { message in
+                if device.backend == .simulator {
+                    // No provisioning-profile preflight here: SimulatorInstaller
+                    // strips the original device signature entirely and re-signs
+                    // ad-hoc, so profile/device-registration checks don't apply.
+                    try SimulatorInstaller.install(ipaPath: path, device: device) { message in
                         Task { @MainActor in self.state = .installing(message: message) }
                     }
-                case .classic:
-                    try ClassicDeviceInstaller.install(ipaPath: path, device: device) { message in
-                        Task { @MainActor in self.state = .installing(message: message) }
+                } else {
+                    let blockers = try IPAPreflight.installation(ipaPath: path, device: device).filter { $0.status == .blocked }
+                    guard blockers.isEmpty else { throw IPAPreflight.Failure.blocked(blockers.map { $0.title + ": " + $0.detail }.joined(separator: "\n")) }
+                    switch device.backend {
+                    case .coreDevice:
+                        try DeviceInstaller.install(ipaPath: path, device: device) { message in
+                            Task { @MainActor in self.state = .installing(message: message) }
+                        }
+                    case .classic:
+                        try ClassicDeviceInstaller.install(ipaPath: path, device: device) { message in
+                            Task { @MainActor in self.state = .installing(message: message) }
+                        }
+                    case .simulator:
+                        break // handled above
                     }
                 }
                 await self.markInstalled(deviceName: device.name)
