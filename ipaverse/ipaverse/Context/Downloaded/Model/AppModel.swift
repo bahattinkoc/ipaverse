@@ -54,6 +54,13 @@ struct AppStoreApp: Codable, Identifiable, Equatable, Sendable {
         self.iconURL = iconURL
         self.platform = platform
     }
+
+    /// Apple only grants a first-time license through its own client. Deep-linking
+    /// here lets the user "Get" the app once so the private API can find a license.
+    var appStoreURL: URL? {
+        guard let id else { return nil }
+        return URL(string: "itms-apps://apps.apple.com/app/id\(id)")
+    }
 }
 
 @Model
@@ -147,6 +154,9 @@ enum VersionsLoadState {
     case loading
     case loaded([AppVersion])
     case error(String)
+    /// Apple reports no license for this app and never will via the private API
+    /// until it's acquired once through a real App Store client.
+    case licenseRequired(String)
 }
 
 struct VersionsOutput {

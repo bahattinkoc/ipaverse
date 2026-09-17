@@ -432,23 +432,22 @@ final class AppStoreService: AppStoreServiceProtocol {
         applyAppStoreHeaders(to: &request, account: account)
         request.httpBody = try AppStoreDownloadProduct.body(appID: app.id ?? 0, guid: guid, versionID: versionID)
         var bagUpdateEndpoint: URL?
-        let latestVersionID: (() async throws -> String)?
-        if app.platform == nil || app.platform == .ios || app.platform == .ipados {
-            latestVersionID = {
-                guard let country = StoreFrontCatalog.countryCode(for: account.storeFront) else {
-                    throw AppStoreDownloadProductError.missingCatalogVersion
-                }
-                var lookup = try AppStoreDownloadProduct.catalogRequest(appID: app.id ?? 0, countryCode: country)
-                lookup.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
-                self.logger.logRequest(lookup)
-                let (data, response) = try await self.session.data(for: lookup)
-                self.logger.logResponse(response, data: data, error: nil)
-                guard let http = response as? HTTPURLResponse else { throw LoginError.networkError }
-                guard http.statusCode == 200 else { throw AppStoreDownloadProductError.http(http.statusCode) }
-                return try AppStoreDownloadProduct.catalogVersionID(data: data, appID: app.id ?? 0)
+        // The MDM catalog lookup is keyed only by adamId, not platform — it resolves a
+        // pinnable version for macOS software just as well as iOS/iPadOS, and pinning a
+        // version is what lets the primary endpoint succeed instead of the flaky
+        // /r/redownload fallback (see AppStoreDownloadProduct.item).
+        let latestVersionID: () async throws -> String = {
+            guard let country = StoreFrontCatalog.countryCode(for: account.storeFront) else {
+                throw AppStoreDownloadProductError.missingCatalogVersion
             }
-        } else {
-            latestVersionID = nil
+            var lookup = try AppStoreDownloadProduct.catalogRequest(appID: app.id ?? 0, countryCode: country)
+            lookup.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+            self.logger.logRequest(lookup)
+            let (data, response) = try await self.session.data(for: lookup)
+            self.logger.logResponse(response, data: data, error: nil)
+            guard let http = response as? HTTPURLResponse else { throw LoginError.networkError }
+            guard http.statusCode == 200 else { throw AppStoreDownloadProductError.http(http.statusCode) }
+            return try AppStoreDownloadProduct.catalogVersionID(data: data, appID: app.id ?? 0)
         }
         do {
             return try await AppStoreDownloadProduct.item(request: request, redownloadEndpoint: {
@@ -471,7 +470,7 @@ final class AppStoreService: AppStoreServiceProtocol {
                 }
                 return url
             }, latestVersionID: latestVersionID,
-               updateEndpoint: latestVersionID == nil ? nil : { bagUpdateEndpoint },
+               updateEndpoint: { bagUpdateEndpoint },
                bundleID: app.bundleID, send: { request in
                 self.logger.logRequest(request)
                 let (data, response) = try await self.session.data(for: request)
@@ -482,7 +481,7 @@ final class AppStoreService: AppStoreServiceProtocol {
             if Constant.authFailureCodes.contains(code) || message == Constant.customerMessagePasswordChanged {
                 throw LoginError.tokenExpired
             }
-            if code == Constant.failureTypeLicenseNotFound { throw LoginError.licenseRequired }
+            if code == Constant.failureTypeLicenseNotFound || code == Constant.failureTypeTermsPageRedirect { throw LoginError.licenseRequired }
             throw AppStoreDownloadProductError.failure(code: code, message: message)
         }
     }
@@ -918,6 +917,10 @@ private extension AppStoreService {
         static let failureTypeSignInRequired = "2042"
         static let failureTypeDeviceVerificationFailed = "1008"
         static let failureTypeLicenseNotFound = "9610"
+        // Apple's redownload/consumer path can reject an app the account never
+        // fully acquired with a "Terms and Conditions changed" dialog instead of
+        // 9610. Same remedy: acquire the app once through a real client.
+        static let failureTypeTermsPageRedirect = "3038"
         // Apple transient server error during auth — safe to retry with a fresh session
         static let failureTypeTransientError = "5005"
 

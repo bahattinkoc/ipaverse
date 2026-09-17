@@ -50,6 +50,9 @@ final class AppDetailVM: ObservableObject {
             await fetchDisplayNames(service: service)
         } catch LoginError.tokenExpired {
             await loginViewModel?.logout(withMessage: "Session expired. Please login again.")
+        } catch AppStorePurchaseError.licenseUnavailable {
+            versionsState = .licenseRequired(AppStorePurchaseError.licenseUnavailable.localizedDescription)
+            selectedVersionId = nil
         } catch {
             versionsState = .error(error.localizedDescription)
             selectedVersionId = nil

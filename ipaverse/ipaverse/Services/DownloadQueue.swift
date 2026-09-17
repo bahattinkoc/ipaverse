@@ -4,7 +4,7 @@ import SwiftData
 
 struct DownloadJob: Codable, Identifiable {
     enum State: String, Codable {
-        case queued, preparing, downloading, processing, completed, failed, cancelled, interrupted, waitingForAccount
+        case queued, preparing, downloading, processing, completed, failed, cancelled, interrupted, waitingForAccount, licenseRequired
         var active: Bool { self == .preparing || self == .downloading || self == .processing }
         var label: String {
             switch self {
@@ -17,6 +17,7 @@ struct DownloadJob: Codable, Identifiable {
             case .cancelled: return "Cancelled"
             case .interrupted: return "Interrupted — retry to restart"
             case .waitingForAccount: return "Sign in to the matching account and region"
+            case .licenseRequired: return "Get this app once in the App Store, then retry"
             }
         }
     }
@@ -149,7 +150,7 @@ final class DownloadQueue: ObservableObject {
         schedule()
     }
     func removeFinished() {
-        jobs.removeAll { [.completed, .failed, .cancelled].contains($0.state) && running[$0.id] == nil }
+        jobs.removeAll { [.completed, .failed, .cancelled, .licenseRequired].contains($0.state) && running[$0.id] == nil }
         persist()
     }
 
@@ -184,12 +185,15 @@ final class DownloadQueue: ObservableObject {
                         if let version = $0.readableVersion(result.version) { $0.displayVersion = version }
                         $0.bytesWritten = max($0.bytesWritten, $0.totalBytes)
                     }
+                } catch LoginError.tokenExpired {
+                    guard !Task.isCancelled else { return }
+                    mutate(id) { $0.state = .waitingForAccount; $0.message = LoginError.tokenExpired.localizedDescription }
+                } catch AppStorePurchaseError.licenseUnavailable {
+                    guard !Task.isCancelled else { return }
+                    mutate(id) { $0.state = .licenseRequired; $0.message = AppStorePurchaseError.licenseUnavailable.localizedDescription }
                 } catch {
                     guard !Task.isCancelled else { return }
-                    mutate(id) {
-                        $0.state = (error as? LoginError) == .tokenExpired ? .waitingForAccount : .failed
-                        $0.message = error.localizedDescription
-                    }
+                    mutate(id) { $0.state = .failed; $0.message = error.localizedDescription }
                 }
             }
         }

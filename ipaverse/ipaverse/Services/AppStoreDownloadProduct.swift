@@ -46,6 +46,25 @@ enum AppStoreDownloadProduct {
         let primary = try await response(to: request, send: send)
         if let item = primary.first { return item }
 
+        // The /r/redownload consumer dispatch path is unreliable when no version
+        // is pinned — it can fail unrelated apps with spurious errors (empty 500s,
+        // stale "Terms and Conditions changed" dialogs) that have nothing to do
+        // with the account. Other App Store tooling avoids it by pinning a real
+        // externalVersionId and retrying the primary (volumeStore) endpoint first.
+        if let latestVersionID,
+           let data = request.httpBody,
+           var pinnedPayload = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           pinnedPayload["externalVersionId"] == nil {
+            try Task.checkCancellation()
+            if let version = try? await latestVersionID(), isValidVersionID(version) {
+                pinnedPayload["externalVersionId"] = version
+                var pinned = request
+                pinned.httpBody = try PropertyListSerialization.data(fromPropertyList: pinnedPayload, format: .xml, options: 0)
+                try Task.checkCancellation()
+                if let item = try? await response(to: pinned, send: send).first { return item }
+            }
+        }
+
         // Only a well-formed HTTP 200 with an explicitly empty songList reaches here.
         // Resolve the consumer endpoint from Apple's bag, keeping volumeStore primary.
         let endpoint = try await redownloadEndpoint()

@@ -122,6 +122,38 @@ struct AppDetailView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            case .licenseRequired(let message):
+                VStack(spacing: 10) {
+                    Image(systemName: "bag.badge.questionmark")
+                        .font(.system(size: 30))
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Text("Get it once in the App Store, then try again here.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    HStack(spacing: 8) {
+                        if let url = viewModel.app.appStoreURL {
+                            Button {
+                                NSWorkspace.shared.open(url)
+                            } label: {
+                                Label("Open in App Store", systemImage: "bag")
+                            }
+                        }
+                        Button("Try Again") {
+                            Task { await viewModel.loadVersions() }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             case .loaded(let versions):
                 List(versions, selection: Binding(
                     get: { viewModel.selectedVersionId },

@@ -11,7 +11,7 @@ struct DownloadQueueView: View {
                 Spacer()
                 Button { queue.removeFinished() } label: {
                     Label("Clear Finished", systemImage: "trash")
-                }.disabled(!queue.jobs.contains { [.completed, .failed, .cancelled].contains($0.state) })
+                }.disabled(!queue.jobs.contains { [.completed, .failed, .cancelled, .licenseRequired].contains($0.state) })
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding()
             Divider()
@@ -37,14 +37,16 @@ struct DownloadQueueView: View {
                 Text(job.app.name ?? job.app.bundleID ?? "App").font(.headline).lineLimit(1)
                 HStack(spacing: 6) {
                     Text(job.versionLabel).lineLimit(1)
-                    Text(job.state.label).foregroundStyle(job.state == .failed ? .red : .secondary)
+                    Text(job.state.label).foregroundStyle(job.state == .failed ? .red : (job.state == .licenseRequired ? .orange : .secondary))
                 }.font(.caption).foregroundStyle(.secondary)
                 if job.state == .downloading || job.state == .processing {
                     DownloadProgressView(job: job)
                 } else if job.state == .preparing {
                     ProgressView().controlSize(.small)
                 }
-                if let message = job.message { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+                if let message = job.message {
+                    Text(message).font(.caption).foregroundStyle(job.state == .licenseRequired ? .orange : .red).textSelection(.enabled)
+                }
                 Text(URL(fileURLWithPath: job.destination).lastPathComponent)
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
@@ -59,6 +61,15 @@ struct DownloadQueueView: View {
         if job.state.active || job.state == .queued || job.state == .waitingForAccount {
             Button { queue.cancel(job.id) } label: { Label("Cancel", systemImage: "xmark.circle") }
                 .labelStyle(.iconOnly).help("Cancel download")
+        } else if job.state == .licenseRequired {
+            HStack(spacing: 10) {
+                if let url = job.app.appStoreURL {
+                    Button { NSWorkspace.shared.open(url) } label: { Label("Open in App Store", systemImage: "bag") }
+                        .labelStyle(.iconOnly).help("Open in App Store to get this app once")
+                }
+                Button { queue.retry(job.id) } label: { Label("Retry", systemImage: "arrow.clockwise.circle") }
+                    .labelStyle(.iconOnly).help("Retry download")
+            }
         } else if job.state != .completed {
             Button { queue.retry(job.id) } label: { Label("Retry", systemImage: "arrow.clockwise.circle") }
                 .labelStyle(.iconOnly).help("Retry download")
