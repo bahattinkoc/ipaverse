@@ -20,4 +20,5 @@ xcrun swiftc -swift-version 5 -D DEBUG -parse-as-library \
   ipaverse/ipaverse/Services/AppStorePurchase.swift \
   Tests/PurchaseTests.swift \
   Tests/DownloadProductTests.swift Tests/MZFinanceTests.swift Tests/AnisetteTests.swift -o "$test_dir/anisette-tests"
-"$test_dir/anisette-tests"
+# Exercise the 2FA locale regression without changing the user's preferences.
+"$test_dir/anisette-tests" -AppleLocale 'en_US@currency=eur'

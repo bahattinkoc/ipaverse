@@ -1,5 +1,12 @@
 import Foundation
 
+extension Locale {
+    /// GSA rejects ICU preference suffixes such as `@currency=eur` during 2FA.
+    var appleAuthenticationIdentifier: String {
+        String(identifier.prefix { $0 != "@" })
+    }
+}
+
 struct AnisetteConfiguration: Equatable, Sendable {
     enum Mode: String, CaseIterable, Identifiable, Sendable {
         case automatic, local, remote
