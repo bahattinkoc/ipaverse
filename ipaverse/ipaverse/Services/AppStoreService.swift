@@ -312,7 +312,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         var searchResult = try JSONDecoder().decode(SearchResult.self, from: data)
 
         if let results = searchResult.results {
-            let updatedResults = results.map { app in
+            let updatedResults = results.filter { $0.supports(platform) }.map { app in
                 AppStoreApp(
                     id: app.id ?? 0,
                     bundleID: app.bundleID ?? "",
@@ -323,7 +323,7 @@ final class AppStoreService: AppStoreServiceProtocol {
                     platform: platform
                 )
             }
-            searchResult = SearchResult(count: searchResult.count, results: updatedResults)
+            searchResult = SearchResult(count: updatedResults.count, results: updatedResults)
         }
 
         return searchResult
@@ -361,7 +361,7 @@ final class AppStoreService: AppStoreServiceProtocol {
         }
 
         let result = try JSONDecoder().decode(SearchResult.self, from: data)
-        guard let raw = result.results?.first else {
+        guard let raw = result.results?.first(where: { $0.supports(platform) }) else {
             throw LoginError.unknownError("App not found")
         }
 
@@ -434,25 +434,40 @@ final class AppStoreService: AppStoreServiceProtocol {
         applyAppStoreHeaders(to: &request, account: account)
         request.httpBody = try AppStoreDownloadProduct.body(appID: app.id ?? 0, guid: guid, versionID: versionID)
         var bagUpdateEndpoint: URL?
-        // The MDM catalog lookup is keyed only by adamId, not platform — it resolves a
-        // pinnable version for macOS software just as well as iOS/iPadOS, and pinning a
-        // version is what lets the primary endpoint succeed instead of the flaky
-        // /r/redownload fallback (see AppStoreDownloadProduct.item).
+        // A universal app ID can resolve to another platform unless a platform-specific
+        // version is selected before the first download request.
         let latestVersionID: () async throws -> String = {
             guard let country = StoreFrontCatalog.countryCode(for: account.storeFront) else {
                 throw AppStoreDownloadProductError.missingCatalogVersion
             }
-            var lookup = try AppStoreDownloadProduct.catalogRequest(appID: app.id ?? 0, countryCode: country)
+            let storefrontPlatform: String? = app.platform == .macos ? "mac" : app.platform == .visionos ? "vision" : nil
+            var lookup: URLRequest
+            if let storefrontPlatform {
+                lookup = URLRequest(url: URL(string: "https://apps.apple.com/\(country.lowercased())/app/id\(app.id ?? 0)?platform=\(storefrontPlatform)")!)
+            } else {
+                lookup = try AppStoreDownloadProduct.catalogRequest(appID: app.id ?? 0, countryCode: country,
+                    platform: app.platform == .tvos ? "atv9" : "enterprisestore")
+            }
             lookup.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
             self.logger.logRequest(lookup)
             let (data, response) = try await self.session.data(for: lookup)
             self.logger.logResponse(response, data: data, error: nil)
             guard let http = response as? HTTPURLResponse else { throw LoginError.networkError }
             guard http.statusCode == 200 else { throw AppStoreDownloadProductError.http(http.statusCode) }
+            if let storefrontPlatform {
+                return try AppStoreDownloadProduct.storefrontVersionID(data: data, appID: app.id ?? 0,
+                    platform: storefrontPlatform, bundleID: app.bundleID)
+            }
             return try AppStoreDownloadProduct.catalogVersionID(data: data, appID: app.id ?? 0)
         }
+        if versionID == nil || versionID == "" {
+            let selectedVersion = try await latestVersionID()
+            request.httpBody = try AppStoreDownloadProduct.body(appID: app.id ?? 0, guid: guid, versionID: selectedVersion)
+        }
+        let updateEndpoint: (() async throws -> URL?)? = (app.platform == nil || app.platform == .ios || app.platform == .ipados || app.platform == .macos)
+            ? { bagUpdateEndpoint } : nil
         do {
-            return try await AppStoreDownloadProduct.item(request: request, redownloadEndpoint: {
+            let item = try await AppStoreDownloadProduct.item(request: request, redownloadEndpoint: {
                 var bagRequest = URLRequest(url: URL(string: "https://\(Constant.privateInitDomain)\(Constant.privateInitPath)")!)
                 bagRequest.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
                 self.logger.logRequest(bagRequest)
@@ -472,13 +487,15 @@ final class AppStoreService: AppStoreServiceProtocol {
                 }
                 return url
             }, latestVersionID: latestVersionID,
-               updateEndpoint: { bagUpdateEndpoint },
+               updateEndpoint: updateEndpoint,
                bundleID: app.bundleID, send: { request in
                 self.logger.logRequest(request)
                 let (data, response) = try await self.session.data(for: request)
                 self.logger.logResponse(response, data: data, error: nil)
                 return (self.normalizePlistData(data), response)
             })
+            if app.platform == .macos { _ = try MacPackage.dpInfo(from: item) }
+            return item
         } catch AppStoreDownloadProductError.failure(let code, let message) {
             if Constant.authFailureCodes.contains(code) || message == Constant.customerMessagePasswordChanged {
                 throw LoginError.tokenExpired
@@ -533,6 +550,8 @@ final class AppStoreService: AppStoreServiceProtocol {
                 }
             } else {
                 try PackageDownload.validate(staged, isMacPackage: false)
+                try AppStoreDownloadProduct.validatePlatform(plist: IPAResigner.loadInfoPlist(ipaPath: staged.path),
+                    platform: (app.platform ?? .ios).rawValue)
                 do {
                     try IPAPatcher().applyPatches(ipaPath: staged.path, sinfs: sinfs, email: account.email)
                     try PackageDownload.validate(staged, isMacPackage: false)
@@ -547,6 +566,13 @@ final class AppStoreService: AppStoreServiceProtocol {
     // MARK: - List Versions
     func listVersions(app: AppStoreApp, account: Account) async throws -> VersionsOutput {
         let firstItem = try await downloadItem(app: app, account: account)
+        if app.platform != .macos {
+            guard let urlString = firstItem["URL"] as? String, let url = URL(string: urlString) else {
+                throw AppStoreDownloadProductError.invalidResponse
+            }
+            let plist = try await PartialZIPReader(url: url).readInfoPlist()
+            try AppStoreDownloadProduct.validatePlatform(plist: plist, platform: (app.platform ?? .ios).rawValue)
+        }
         let metadata = firstItem["metadata"] as? [String: Any] ?? [:]
 
         guard let rawIds = metadata["softwareVersionExternalIdentifiers"] as? [Any] else {
@@ -570,8 +596,14 @@ final class AppStoreService: AppStoreServiceProtocol {
         // API metadata can be stale (ipatool comment: "Do not fall back to item.Metadata here").
         if let cdnURLString = firstItem["URL"] as? String,
            let cdnURL = URL(string: cdnURLString) {
-            if let info = try? await PartialZIPReader(url: cdnURL).readVersionMetadata() {
-                return info
+            do {
+                return try await PartialZIPReader(url: cdnURL).readVersionMetadata(
+                    expectedPlatform: app.platform == .macos ? nil : (app.platform ?? .ios).rawValue)
+            } catch let error as AppStoreDownloadProductError {
+                throw error
+            } catch {
+                // Only transport/ZIP errors may use the store metadata fallback.
+                if app.platform == .tvos || app.platform == .visionos { throw error }
             }
         }
 

@@ -3,6 +3,15 @@ import SwiftData
 @testable import ipaverse
 
 final class WorkspaceTests: XCTestCase {
+    func testBundleIDSearchRecognizesUncommonPrefixes() {
+        for identifier in ["alvr.client", "com.worthdoingbadly.ALVRClient", "dev.example.app", "studio-name.App2"] {
+            XCTAssertTrue(SearchVM.isBundleID(identifier), identifier)
+        }
+        for term in ["ALVR", "Prime Video", "alvr..client", ".alvr", "alvr.", "https://example.com"] {
+            XCTAssertFalse(SearchVM.isBundleID(term), term)
+        }
+    }
+
     private var directory: URL!
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("ipaverse-tests-\(UUID().uuidString)")
@@ -36,6 +45,31 @@ final class WorkspaceTests: XCTestCase {
         })
         XCTAssertEqual(try Data(contentsOf: destination), original)
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasPrefix(".ipaverse-") })
+    }
+
+    func testWrongPlatformPackagePreservesDestination() throws {
+        let original = Data("existing tvOS package".utf8)
+        let destination = try file("tv.ipa", original)
+        let incoming = try ipa("iphone", version: "1.0", bundleName: "Universal",
+            platforms: ["iPhoneOS"], families: [1, 2])
+        let size = try Data(contentsOf: incoming).count
+        XCTAssertThrowsError(try PackageDownload.finish(temporary: incoming, response: response(200, length: size), destination: destination) { staged in
+            try PackageDownload.validate(staged, isMacPackage: false)
+            try AppStoreDownloadProduct.validatePlatform(plist: IPAResigner.loadInfoPlist(ipaPath: staged.path), platform: "tvOS")
+        }) { error in
+            guard case AppStoreDownloadProductError.platformMismatch("tvOS") = error else {
+                return XCTFail("Expected platform mismatch, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), original)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains { $0.hasPrefix(".ipaverse-") })
+    }
+
+    func testCatalogDeviceSupportSurvivesDecoding() throws {
+        let data = Data(#"{"resultCount":2,"results":[{"trackId":1,"supportedDevices":["iPhone16"]},{"trackId":2,"supportedDevices":["AppleTV4"]}]}"#.utf8)
+        let result = try JSONDecoder().decode(SearchResult.self, from: data)
+        XCTAssertEqual(result.results?.filter { $0.supports(.tvos) }.map(\.id), [2])
+        XCTAssertEqual(result.results?.filter { $0.supports(.ios) }.map(\.id), [1])
     }
 
     func testDownloadCommitsOnlyPreparedFile() throws {
@@ -290,11 +324,11 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertThrowsError(try ProcessRunner.run("/bin/sleep", ["3"], timeout: 0.05))
     }
 
-    private func ipa(_ name: String, version: String, bundleName: String) throws -> URL {
+    private func ipa(_ name: String, version: String, bundleName: String, platforms: [String] = ["iPhoneOS"], families: [Int] = [1, 2]) throws -> URL {
         let root = directory.appendingPathComponent(name)
         let bundle = root.appendingPathComponent("Payload/\(bundleName).app")
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        let data = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.test", "CFBundleShortVersionString": version], format: .xml, options: 0)
+        let data = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.test", "CFBundleShortVersionString": version, "CFBundleSupportedPlatforms": platforms, "UIDeviceFamily": families], format: .xml, options: 0)
         try data.write(to: bundle.appendingPathComponent("Info.plist"))
         let output = directory.appendingPathComponent(name + ".ipa")
         _ = try ProcessRunner.run("/usr/bin/zip", ["-qr", output.path, "Payload"], directory: root)

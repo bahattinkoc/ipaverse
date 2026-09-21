@@ -8,6 +8,7 @@ enum AppStoreDownloadProductError: LocalizedError {
     case invalidEndpoint
     case missingCatalogVersion
     case mismatchedUpdate
+    case platformMismatch(String)
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ enum AppStoreDownloadProductError: LocalizedError {
         case .noItems: "Apple returned no downloadable file for this app or version. Please try again later."
         case .invalidEndpoint: "Apple's service list did not provide a supported download endpoint."
         case .missingCatalogVersion: "Apple's catalog did not provide a current version for this app in your account's region."
+        case .platformMismatch(let expected): "Apple returned a package that does not support \(expected)."
         case .mismatchedUpdate: "Apple returned a different app or version than requested."
         }
     }
@@ -42,6 +44,7 @@ enum AppStoreDownloadProduct {
         bundleID: String? = nil,
         send: (URLRequest) async throws -> (Data, URLResponse)
     ) async throws -> [String: Any] {
+        var request = request
         try Task.checkCancellation()
         let primary = try await response(to: request, send: send)
         if let item = primary.first { return item }
@@ -60,6 +63,8 @@ enum AppStoreDownloadProduct {
                 pinnedPayload["externalVersionId"] = version
                 var pinned = request
                 pinned.httpBody = try PropertyListSerialization.data(fromPropertyList: pinnedPayload, format: .xml, options: 0)
+                // Keep the selected platform/version when moving to redownload.
+                request = pinned
                 try Task.checkCancellation()
                 if let item = try? await response(to: pinned, send: send).first { return item }
             }
@@ -101,8 +106,8 @@ enum AppStoreDownloadProduct {
             (fallbackData, fallbackResponse) = try await send(fallback)
         }
         // A pinned redownload can also return an empty 500. The bag's update
-        // endpoint can serve the same iOS build (ipatool 741049d). Callers only
-        // provide this fallback for iOS/iPadOS; do not infer a missing license.
+        // endpoint can serve the same iOS or macOS build (ipatool 741049d).
+        // Callers exclude tvOS/visionOS; do not infer a missing license.
         if (fallbackResponse as? HTTPURLResponse)?.statusCode == 500,
            fallbackData.isEmpty, let version = payload["appExtVrsId"] as? String,
            isValidVersionID(version), let updateEndpoint {
@@ -183,11 +188,11 @@ enum AppStoreDownloadProduct {
         return items
     }
 
-    static func catalogRequest(appID: Int64, countryCode: String) throws -> URLRequest {
+    static func catalogRequest(appID: Int64, countryCode: String, platform: String = "enterprisestore") throws -> URLRequest {
         guard appID > 0, countryCode.count == 2 else { throw AppStoreDownloadProductError.missingCatalogVersion }
         var url = URLComponents(string: "https://uclient-api.itunes.apple.com/WebObjects/MZStorePlatform.woa/wa/lookup")!
         url.queryItems = ["version": "2", "id": String(appID), "p": "mdm-lockup",
-                          "caller": "MDM", "platform": "enterprisestore",
+                          "caller": "MDM", "platform": platform,
                           "cc": countryCode.lowercased(), "l": "en"].map { URLQueryItem(name: $0.key, value: $0.value) }
         var request = URLRequest(url: url.url!)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -213,6 +218,71 @@ enum AppStoreDownloadProduct {
         }
         guard let externalID, isValidVersionID(externalID) else { throw AppStoreDownloadProductError.missingCatalogVersion }
         return externalID
+    }
+
+    /// The product page carries separate offers for universal Mac/vision apps.
+    /// Never take an unrelated recommendation or the iOS offer from that page.
+    static func storefrontVersionID(data: Data, appID: Int64, platform: String, bundleID: String?) throws -> String {
+        guard let html = String(data: data, encoding: .utf8),
+              let regex = try? NSRegularExpression(pattern: #"<script\b[^>]*\bid=["']serialized-server-data["'][^>]*>(.*?)</script>"#,
+                                                    options: [.dotMatchesLineSeparators]),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html),
+              let json = String(html[range]).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: json) else {
+            throw AppStoreDownloadProductError.missingCatalogVersion
+        }
+        var versions = Set<String>()
+        func visit(_ value: Any) {
+            if let list = value as? [Any] { list.forEach(visit) }
+            guard let object = value as? [String: Any] else { return }
+            if let config = object["purchaseConfiguration"] as? [String: Any],
+               (config["appPlatforms"] as? [String])?.contains(platform) == true,
+               platform != "vision" || config["metricsPlatformDisplayStyle"] as? String == "vision",
+               bundleID == nil || bundleID == "" || config["bundleId"] as? String == bundleID,
+               let buyParams = config["buyParams"] as? String {
+                var params = URLComponents()
+                params.query = buyParams
+                let items = params.queryItems ?? []
+                if items.first(where: { $0.name == "salableAdamId" })?.value == String(appID),
+                   let version = items.first(where: { $0.name == "appExtVrsId" })?.value,
+                   isValidVersionID(version) { versions.insert(version) }
+            }
+            object.values.forEach(visit)
+        }
+        visit(root)
+        guard versions.count == 1, let version = versions.first else {
+            throw AppStoreDownloadProductError.missingCatalogVersion
+        }
+        return version
+    }
+
+    static func catalogSupports(platform: String, devices: [String], kind: String?) -> Bool {
+        let prefixes: [String]
+        switch platform {
+        case "tvOS": prefixes = ["AppleTV"]
+        case "visionOS": prefixes = ["AppleVisionPro", "RealityDevice", "Vision"]
+        case "iPadOS": prefixes = ["iPad"]
+        case "iOS": prefixes = ["iPhone", "iPod"]
+        case "macOS": return kind == "mac-software" || devices.contains { $0.hasPrefix("Mac") }
+        default: return false
+        }
+        return devices.contains { device in prefixes.contains { device.hasPrefix($0) } }
+    }
+
+    static func validatePlatform(plist: [String: Any], platform: String) throws {
+        let supported = plist["CFBundleSupportedPlatforms"] as? [String] ?? []
+        let families = plist["UIDeviceFamily"] as? [Int] ?? []
+        let valid: Bool
+        switch platform {
+        case "tvOS": valid = supported.contains("AppleTVOS")
+        case "visionOS": valid = supported.contains("XROS")
+        case "iOS": valid = supported.contains("iPhoneOS") && families.contains(1)
+        case "iPadOS": valid = supported.contains("iPhoneOS") && families.contains(2)
+        case "macOS": valid = supported.contains("MacOSX")
+        default: valid = false
+        }
+        guard valid else { throw AppStoreDownloadProductError.platformMismatch(platform) }
     }
 
     private static func isValidVersionID(_ value: String) -> Bool {

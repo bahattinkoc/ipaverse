@@ -34,6 +34,8 @@ struct AppStoreApp: Codable, Identifiable, Equatable, Sendable {
     let price: Double?
     let iconURL: String?
     let platform: AppPlatform?
+    var supportedDevices: [String]? = nil
+    var kind: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id = "trackId"
@@ -43,6 +45,7 @@ struct AppStoreApp: Codable, Identifiable, Equatable, Sendable {
         case price
         case iconURL = "artworkUrl100"
         case platform
+        case supportedDevices, kind
     }
 
     init(id: Int64, bundleID: String, name: String, version: String, price: Double, iconURL: String? = nil, platform: AppPlatform? = nil) {
@@ -53,6 +56,11 @@ struct AppStoreApp: Codable, Identifiable, Equatable, Sendable {
         self.price = price
         self.iconURL = iconURL
         self.platform = platform
+    }
+
+    func supports(_ selectedPlatform: AppPlatform) -> Bool {
+        AppStoreDownloadProduct.catalogSupports(platform: selectedPlatform.rawValue,
+            devices: supportedDevices ?? [], kind: kind)
     }
 
     /// Apple only grants a first-time license through its own client. Deep-linking

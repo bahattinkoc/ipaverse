@@ -72,13 +72,17 @@ final class SearchVM: ObservableObject {
     }
 
     var isLookupMode: Bool {
-        isBundleID(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
+        Self.isBundleID(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private func isBundleID(_ text: String) -> Bool {
-        guard !text.contains(" "), text.contains(".") else { return false }
-        let lower = text.lowercased()
-        return ["com.", "net.", "org.", "io.", "app.", "co.", "me."].contains(where: { lower.hasPrefix($0) })
+    nonisolated static func isBundleID(_ text: String) -> Bool {
+        // Bundle identifiers are not limited to common domain prefixes (e.g. alvr.client).
+        let components = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count >= 2 else { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+        return components.allSatisfy { component in
+            !component.isEmpty && component.unicodeScalars.allSatisfy { allowed.contains($0) }
+        }
     }
 
     func performSearch() {
@@ -89,14 +93,14 @@ final class SearchVM: ObservableObject {
         errorMessage = nil
         isSearching = true
 
-        if !isBundleID(trimmed) { saveSearchHistory() }
+        if !Self.isBundleID(trimmed) { saveSearchHistory() }
 
         searchTask?.cancel()
         searchTask = Task {
             do {
                 let service = AppStoreService()
                 let searchAccount = effectiveAccount
-                if isBundleID(trimmed) {
+                if Self.isBundleID(trimmed) {
                     let app = try await service.lookup(bundleID: trimmed, account: searchAccount, platform: selectedPlatform)
                     guard !Task.isCancelled else { return }
                     searchResults = [app]
@@ -110,7 +114,7 @@ final class SearchVM: ObservableObject {
                 isSearching = false
             } catch {
                 guard !Task.isCancelled else { return }
-                let msg = isBundleID(trimmed)
+                let msg = Self.isBundleID(trimmed)
                     ? "App not found: \(trimmed)"
                     : "Search failed: \(error.localizedDescription)"
                 errorMessage = msg

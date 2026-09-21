@@ -53,7 +53,26 @@ struct PartialZIPReader {
         self.session = session ?? Self.metadataSession
     }
 
-    func readVersionMetadata() async throws -> VersionDisplayInfo {
+    func readInfoPlist() async throws -> [String: Any] {
+        let (data, _) = try await mainInfoPlist()
+        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            throw PartialZIPError.noVersionInfo
+        }
+        return plist
+    }
+
+    func readVersionMetadata(expectedPlatform: String? = nil) async throws -> VersionDisplayInfo {
+        let (data, entry) = try await mainInfoPlist()
+        if let expectedPlatform {
+            guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                throw PartialZIPError.noVersionInfo
+            }
+            try AppStoreDownloadProduct.validatePlatform(plist: plist, platform: expectedPlatform)
+        }
+        return try parseVersionMetadata(from: data, entry: entry)
+    }
+
+    private func mainInfoPlist() async throws -> (Data, CDEntry) {
         let fileSize = try await fetchFileSize()
         let eocd = try await findEOCD(fileSize: fileSize)
         guard fileSize >= 22, eocd.cdOffset >= 0, eocd.cdSize > 0,
@@ -65,7 +84,7 @@ struct PartialZIPReader {
             throw PartialZIPError.infoPlistNotFound
         }
         let plistData = try await readFileData(entry: entry)
-        return try parseVersionMetadata(from: plistData, entry: entry)
+        return (plistData, entry)
     }
 
     // MARK: - File Size

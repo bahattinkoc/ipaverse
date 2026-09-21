@@ -3,6 +3,60 @@ import Foundation
 enum DownloadProductTests {
     static func run() async throws {
         let check = MZFinanceTests.check
+        // Universal app search results must not inherit the selected tab blindly.
+        let devices = ["iPhone16-iPhone16", "iPadAir-iPadAir", "AppleTV4-AppleTV4"]
+        for platform in ["iOS", "iPadOS", "tvOS"] {
+            try check(AppStoreDownloadProduct.catalogSupports(platform: platform, devices: devices, kind: "software"), "Lost supported platform")
+        }
+        try check(!AppStoreDownloadProduct.catalogSupports(platform: "tvOS", devices: ["iPhone16"], kind: "software"), "iPhone result leaked into tvOS")
+        try check(!AppStoreDownloadProduct.catalogSupports(platform: "visionOS", devices: devices, kind: "software"), "Compatible iPad app mislabeled native visionOS")
+        for device in ["AppleVisionPro-AppleVisionPro", "AppleVisionProM5-AppleVisionProM5"] {
+            try check(AppStoreDownloadProduct.catalogSupports(platform: "visionOS", devices: [device], kind: "software"), "Native Vision Pro app filtered out")
+            try check(!AppStoreDownloadProduct.catalogSupports(platform: "iOS", devices: [device], kind: "software"), "Vision Pro app mislabeled iPhone")
+        }
+        try check(AppStoreDownloadProduct.catalogSupports(platform: "macOS", devices: [], kind: "mac-software"), "Lost Mac catalog result")
+        let tvRequest = try AppStoreDownloadProduct.catalogRequest(appID: 123, countryCode: "TR", platform: "atv9")
+        try check(URLComponents(url: tvRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!.contains(URLQueryItem(name: "platform", value: "atv9")), "tvOS catalog fell back to iOS")
+
+        let platformFixtures: [(String, [String: Any])] = [
+            ("iOS", ["CFBundleSupportedPlatforms": ["iPhoneOS"], "UIDeviceFamily": [1, 2]]),
+            ("iPadOS", ["CFBundleSupportedPlatforms": ["iPhoneOS"], "UIDeviceFamily": [2]]),
+            ("tvOS", ["CFBundleSupportedPlatforms": ["AppleTVOS"], "UIDeviceFamily": [3]]),
+            ("visionOS", ["CFBundleSupportedPlatforms": ["XROS"], "UIDeviceFamily": [7]]),
+            ("macOS", ["CFBundleSupportedPlatforms": ["MacOSX"]])
+        ]
+        for (platform, plist) in platformFixtures {
+            try AppStoreDownloadProduct.validatePlatform(plist: plist, platform: platform)
+            if platform != "tvOS" {
+                do {
+                    try AppStoreDownloadProduct.validatePlatform(plist: plist, platform: "tvOS")
+                    throw MZFinanceTests.Failure(message: "Accepted another platform as tvOS")
+                } catch AppStoreDownloadProductError.platformMismatch { }
+            }
+        }
+        do {
+            try AppStoreDownloadProduct.validatePlatform(plist: platformFixtures[1].1, platform: "iOS")
+            throw MZFinanceTests.Failure(message: "Accepted iPad-only app as iPhone")
+        } catch AppStoreDownloadProductError.platformMismatch { }
+        func configuration(_ platform: String, _ appID: Int, _ version: String) -> [String: Any] {
+            ["purchaseConfiguration": ["appPlatforms": [platform], "metricsPlatformDisplayStyle": platform,
+                "bundleId": "fixture.app", "buyParams": "salableAdamId=\(appID)&appExtVrsId=\(version)"]]
+        }
+        func page(_ configs: [[String: Any]]) throws -> Data {
+            let json = String(data: try JSONSerialization.data(withJSONObject: configs), encoding: .utf8)!
+            return Data("<script id='serialized-server-data' type='application/json'>\(json)</script>".utf8)
+        }
+        for platform in ["mac", "vision"] {
+            let data = try page([configuration("iphone", 123, "111"), configuration(platform, 999, "222"), configuration(platform, 123, "333")])
+            let version = try AppStoreDownloadProduct.storefrontVersionID(data: data, appID: 123, platform: platform, bundleID: "fixture.app")
+            try check(version == "333", "Selected wrong universal app offer")
+            for configs in [[configuration("iphone", 123, "111")], [configuration(platform, 123, "333"), configuration(platform, 123, "444")]] {
+                do {
+                    _ = try AppStoreDownloadProduct.storefrontVersionID(data: page(configs), appID: 123, platform: platform, bundleID: "fixture.app")
+                    throw MZFinanceTests.Failure(message: "Accepted missing or ambiguous platform offer")
+                } catch AppStoreDownloadProductError.missingCatalogVersion { }
+            }
+        }
         let endpoint = URL(string: "https://downloaddispatch.itunes.apple.com/r/redownload?fixture=1")!
         let empty: [String: Any] = ["authorized": false, "status": 0,
                                    "jingleDocType": "purchaseSuccess", "jingleAction": "purchaseProduct",
@@ -112,7 +166,7 @@ enum DownloadProductTests {
         func emptyHTTP(_ request: URLRequest, status: Int = 500, data: Data = Data()) -> (Data, URLResponse) {
             (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
-        // Reported chain: empty purchase success -> empty redownload 500 -> pinned success.
+        // Empty primary -> pinned primary 500 -> pinned redownload.
         for retrySucceeds in [true, false] {
             var sent: [URLRequest] = []
             var lookups = 0
@@ -135,7 +189,7 @@ enum DownloadProductTests {
             let payload = try PropertyListSerialization.propertyList(from: pinned.httpBody!, format: nil) as! [String: Any]
             try check(payload["appExtVrsId"] as? String == "891009506", "Missing catalog version")
             try check(payload["externalVersionId"] == nil && payload["salableAdamId"] as? Int == 335162906, "Pinned retry changed app")
-            try check(pinned.url == sent[1].url && pinned.allHTTPHeaderFields == sent[1].allHTTPHeaderFields && pinned.httpMethod == "POST", "Pinned retry lost session context")
+            try check(pinned.url?.path == "/r/redownload" && sent[1].url?.path.hasSuffix("volumeStoreDownloadProduct") == true && pinned.allHTTPHeaderFields == sent[1].allHTTPHeaderFields && pinned.httpMethod == "POST", "Pinned retry lost session context")
         }
         // No substitution for historical versions, nonempty errors, other statuses or primary 500.
         for (version, status, body, primary) in [
@@ -191,6 +245,22 @@ enum DownloadProductTests {
             } catch AppStoreDownloadProductError.missingCatalogVersion {}
         }
         let updateEndpoint = URL(string: "https://downloaddispatch.itunes.apple.com/up/updateProduct")!
+        // Mac downloads may also need the pinned update route after an empty 500.
+        var macRequest = try request("891089010")
+        macRequest.httpBody = try AppStoreDownloadProduct.body(appID: 545519333, guid: "fixture", versionID: "891089010")
+        var macCalls = 0
+        let macItem = try await AppStoreDownloadProduct.item(request: macRequest, redownloadEndpoint: { endpoint },
+            updateEndpoint: { updateEndpoint }, bundleID: "com.amazon.aiv.AIVApp", send: { req in
+                macCalls += 1
+                if macCalls == 1 { return try result(req, empty) }
+                if req.url?.path != "/up/updateProduct" { return emptyHTTP(req) }
+                let payload = try PropertyListSerialization.propertyList(from: req.httpBody!, format: nil) as! [String: Any]
+                try check(payload["appExtVrsId"] as? String == "891089010", "Mac fallback lost the Mac version")
+                return try result(req, ["songList": [["dpInfo": Data([4, 5, 6]), "metadata": [
+                    "itemId": 545519333, "softwareVersionExternalIdentifier": "891089010",
+                    "softwareVersionBundleId": "com.amazon.aiv.AIVApp", "software-platform": "mac"]]]])
+            })
+        try check(macCalls == 3 && macItem["dpInfo"] as? Data == Data([4, 5, 6]), "Mac fallback lost package data")
         // Exact new report: primary empty -> unpinned 500 -> pinned 500 -> update.
         // Historical selections skip catalog resolution and retain their version.
         for version in [nil, "123"] as [String?] {
