@@ -137,7 +137,7 @@ private final class LocalAnisetteSource: @unchecked Sendable {
         result["X-Mme-Device-Id"] = deviceID()
         result["X-Apple-I-Client-Time"] = currentClientTime()
         result["X-Apple-I-TimeZone"] = TimeZone.current.abbreviation() ?? "UTC"
-        result["X-Apple-Locale"] = Locale.current.identifier
+        result["X-Apple-Locale"] = Locale.current.appleAuthenticationIdentifier
         result["X-Mme-Client-Info"] = AnisetteClientInfo.current
 
         return result

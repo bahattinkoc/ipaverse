@@ -187,7 +187,7 @@ struct AnisetteV3Client: AnisetteRemoteSource {
             "X-Mme-Client-Info": AnisetteClientInfo.replacingLegacyIdentifier(in: identity.clientInfo),
             "X-Apple-I-Client-Time": ISO8601DateFormatter().string(from: Date()),
             "X-Apple-I-TimeZone": TimeZone.current.abbreviation() ?? "UTC",
-            "X-Apple-Locale": Locale.current.identifier
+            "X-Apple-Locale": Locale.current.appleAuthenticationIdentifier
         ]
     }
 
@@ -208,7 +208,7 @@ struct AnisetteV3Client: AnisetteRemoteSource {
         request.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         request.setValue(localID, forHTTPHeaderField: "X-Mme-Device-Id")
         request.setValue(ISO8601DateFormatter().string(from: Date()), forHTTPHeaderField: "X-Apple-I-Client-Time")
-        request.setValue(Locale.current.identifier, forHTTPHeaderField: "X-Apple-Locale")
+        request.setValue(Locale.current.appleAuthenticationIdentifier, forHTTPHeaderField: "X-Apple-Locale")
         request.setValue(TimeZone.current.abbreviation() ?? "UTC", forHTTPHeaderField: "X-Apple-I-TimeZone")
         return request
     }

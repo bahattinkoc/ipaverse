@@ -314,7 +314,7 @@ final class GSAClient {
             "pbe": false,
             "prkgen": true,
             "svct": "iCloud",
-            "loc": Locale.current.identifier
+            "loc": Locale.current.appleAuthenticationIdentifier
         ]
         for (key, value) in headers {
             cpd[key] = value

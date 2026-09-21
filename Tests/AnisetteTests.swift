@@ -176,6 +176,8 @@ private final class AppleURLProtocol: URLProtocol, @unchecked Sendable {
 @main
 private enum AnisetteTests {
     static func main() async throws {
+        try expect(Locale.current.identifier == "en_US@currency=eur",
+                   "Run scripts/test-anisette.sh to apply the authentication locale fixture")
         try loggerRedactionTests()
         try configurationTests()
         try await providerTests()
@@ -231,6 +233,13 @@ private enum AnisetteTests {
     }
 
     static func configurationTests() throws {
+        for (identifier, expected) in [("en_US@currency=eur", "en_US"),
+                                       ("en_US@rg=inzzzz", "en_US"),
+                                       ("zh_CN@calendar=chinese;currency=eur", "zh_CN"),
+                                       ("zh_TW", "zh_TW"), ("en_US", "en_US")] {
+            try expect(Locale(identifier: identifier).appleAuthenticationIdentifier == expected,
+                       "Authentication locale must preserve language/region without ICU preferences")
+        }
         // Volatile preferences exercise defaults and existing choices without writing to disk.
         let defaults = UserDefaults(suiteName: "AnisetteTests.\(UUID().uuidString)")!
         try expect(AnisetteConfiguration.load(from: defaults).mode == .automatic, "New installs must select automatic fallback")
@@ -294,7 +303,10 @@ private enum AnisetteTests {
 
         // Direct V3 consumers also get a compatible header from an older record.
         let client = AnisetteV3Client(transport: TransportMock(socket: try SocketMock([]), response: { try appleFixture($0) }))
-        try expect(try await client.headers(for: old)["X-Mme-Client-Info"] == compatible, "Direct V3 header retained Xcode")
+        let headers = try await client.headers(for: old)
+        try expect(headers["X-Mme-Client-Info"] == compatible, "Direct V3 header retained Xcode")
+        try expect(headers["X-Apple-Locale"] == "en_US",
+                   "V3 authentication locale includes ICU preferences that break Apple 2FA")
     }
 
     static func providerTests() async throws {
@@ -360,6 +372,8 @@ private enum AnisetteTests {
         for request in transport.requests {
             try expect(request.value(forHTTPHeaderField: "Cookie") == nil && request.value(forHTTPHeaderField: "Authorization") == nil, "Credentials entered provisioning transport")
             if request.url?.host == "gsa.apple.com" {
+                try expect(request.value(forHTTPHeaderField: "X-Apple-Locale") == "en_US",
+                           "Provisioning locale includes ICU preferences that break Apple 2FA")
                 try expect(request.value(forHTTPHeaderField: "X-Mme-Client-Info")?.contains("com.apple.akd/1.0") == true,
                            "Provisioning request advertised the old client identifier")
             }
@@ -411,6 +425,8 @@ private enum AnisetteTests {
         let request = AppleURLProtocol.requests[initialRequestCount]
         let body = try PropertyListSerialization.propertyList(from: request.httpBody!, format: nil) as! [String: Any]
         let cpd = (body["Request"] as! [String: Any])["cpd"] as! [String: Any]
+        try expect(cpd["loc"] as? String == "en_US",
+                   "GSA locale includes ICU preferences that break Apple 2FA")
         try expect(cpd["X-Apple-I-MD"] as? String == "first-otp", "GSA consumed extra OTP")
         try expect(cpd["X-Mme-Client-Info"] as? String == request.value(forHTTPHeaderField: "X-Mme-Client-Info"), "GSA body/header mismatch")
         try expect(request.value(forHTTPHeaderField: "X-Mme-Client-Info")?.contains("com.apple.akd/1.0") == true, "GSA request advertised Xcode")
