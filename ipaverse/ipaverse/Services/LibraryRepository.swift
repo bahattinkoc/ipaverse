@@ -33,11 +33,16 @@ enum LibraryRepository {
     @MainActor
     static func recordDownload(app: AppStoreApp, filePath: String, version: String?,
                                externalVersionID: String?, context: ModelContext) async throws -> String? {
-        let details = await Task.detached { () -> (String?, String?, Date?, String?) in
-            let plist = app.platform == .macos ? nil : try? IPAResigner.loadInfoPlist(ipaPath: filePath)
+        let details = await Task.detached { () -> (String?, String?, Date?, String?, Int64?) in
+            let url = URL(fileURLWithPath: filePath)
+            let isMacBundle = app.platform == .macos && url.pathExtension.lowercased() == "app"
+            let plist = isMacBundle ? try? MacAppBundle.info(at: url) :
+                app.platform == .macos ? nil : try? IPAResigner.loadInfoPlist(ipaPath: filePath)
+            let size = isMacBundle ? try? MacAppBundle.size(at: url) :
+                (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
             return (plist?["CFBundleShortVersionString"] as? String, plist?["CFBundleVersion"] as? String,
                     app.platform == .macos ? nil : IPAResigner.appBuildDate(ipaPath: filePath),
-                    try? fileHash(URL(fileURLWithPath: filePath)))
+                    try? fileHash(url), size)
         }.value
         let record = try upsertFile(app: app, filePath: filePath, context: context,
             version: details.0 ?? version ?? externalVersionID.map { "Build \($0)" } ?? app.version, hash: details.3)
@@ -48,12 +53,16 @@ enum LibraryRepository {
         record.buildVersion = details.1
         record.buildDate = details.2
         record.sha256 = details.3
+        record.fileSize = details.4
         try context.save()
         // Return the readable version, never the synthetic "Build <store ID>" fallback.
         return details.0 ?? version ?? (externalVersionID == nil ? app.version : nil)
     }
 
     static func fileHash(_ url: URL) throws -> String {
+        if url.pathExtension.lowercased() == "app", try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+            return try MacAppBundle.hash(at: url)
+        }
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         var hash = SHA256()

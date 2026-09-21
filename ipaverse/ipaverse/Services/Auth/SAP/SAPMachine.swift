@@ -21,6 +21,58 @@ extension SAPUnicornEngine: SAPMachineMemory {
     func write(address: UInt64, data: [UInt8]) throws { try memWrite(address: address, data: data) }
 }
 
+// Port of IPAtool internal/sap/machine/storeagent.go (MIT).
+// These private offsets are valid only for the SHA-256-pinned StoreAgent image.
+extension SAPMachine {
+    private static let storeAgentBase: UInt64 = 0x0000_1000_c000_0000
+
+    func openStoreSession(hardwareID: [UInt8], dpInfo: Data) throws -> UInt64 {
+        try Task.checkCancellation()
+        let global = try initializeStoreGlobal(hardwareID: hardwareID)
+        beginCall()
+        defer { clearScratch() }
+        let data = try scratch(Array(dpInfo), UInt64(dpInfo.count))
+        let session = try scratch(nil, 8)
+        try storeStatus("session initialization", entry: 0x0debd0, arguments: [UInt64(global), data, UInt64(dpInfo.count), session])
+        let value = try readUInt64(session)
+        guard value != 0 else { throw SAPMachineError.nullContext }
+        return value
+    }
+
+    private func initializeStoreGlobal(hardwareID: [UInt8]) throws -> UInt32 {
+        let hardware = try Self.hardwareBlock(hardwareID)
+        beginCall()
+        defer { clearScratch() }
+        let hardwareAddress = try scratch(hardware, UInt64(hardware.count))
+        // A guest-only path; the shims never access the host's SC Info directory.
+        let path = Array("/Users/Shared/SC Info".utf8) + [0]
+        let pathAddress = try scratch(path, UInt64(path.count))
+        let context = try scratch(nil, 4)
+        try storeStatus("global initialization", entry: 0x0c5fc0, arguments: [0, hardwareAddress, pathAddress, context])
+        let value = try readUInt32(context)
+        guard value != 0 else { throw SAPMachineError.nullContext }
+        return value
+    }
+
+    func decryptStoreChunk(session: UInt64, data: Data) throws -> Data {
+        try Task.checkCancellation()
+        beginCall()
+        defer { clearScratch() }
+        let address = try scratch(Array(data), UInt64(data.count))
+        try storeStatus("decryption", entry: 0x0ee700, arguments: [session, address, UInt64(data.count), address, 0])
+        return Data(try engine.memRead(address: address, size: data.count))
+    }
+
+    func closeStoreSession(_ session: UInt64) throws {
+        try storeStatus("session close", entry: 0x1212d0, arguments: [session])
+    }
+
+    private func storeStatus(_ operation: String, entry: UInt64, arguments: [UInt64]) throws {
+        let status = Int32(truncatingIfNeeded: try invoke(Self.storeAgentBase + entry, arguments))
+        guard status == 0 else { throw SAPMachineError.unexpectedStatus("StoreAgent \(operation)", status) }
+    }
+}
+
 enum SAPMachineError: LocalizedError {
     case exportNotFound(String, String)
     case unexpectedStatus(String, Int32)
@@ -71,7 +123,9 @@ final class SAPMachine {
     private var scratchCursor: UInt64 = 0
     private var closed = false
 
-    init(bundle: SAPAssetBundle) throws {
+    init(bundle: SAPAssetBundle, storeAgent: Data? = nil) throws {
+        try Task.checkCancellation()
+        if let storeAgent { try SAPAssets.verifyStoreAgent(storeAgent) }
         let coreFP = try SAPMachOImage(name: "CoreFP", data: bundle.coreFP)
         let commerceCore = try SAPMachOImage(name: "CommerceCore", data: bundle.commerceCore)
         let commerceKit = try SAPMachOImage(name: "CommerceKit", data: bundle.commerceKit)
@@ -86,6 +140,8 @@ final class SAPMachine {
         for name in Self.entryNames {
             resolvedEntries[name] = try commerceKit.export(name, loadBase: SAPMachineLayout.kitBase)
         }
+        // StoreAgent can import CommerceKit's SAP entry points as well as CoreFP.
+        exports.merge(resolvedEntries) { existing, _ in existing }
 
         let engine = try SAPUnicornEngine()
         var ready = false
@@ -104,17 +160,23 @@ final class SAPMachine {
         let shims = try SAPShims(engine: engine, coreExports: exports, icxs: Array(bundle.coreFPICXS))
         var shimsReady = false
         defer { if !shimsReady { shims.close() } }
+        if storeAgent != nil { try shims.registerStoreAgentServices() }
 
         func resolver(_ name: String) throws -> UInt64 {
             if let address = exports[name] { return address }
             return try shims.resolve(name)
         }
 
-        for (image, base) in [
+        var images = [
             (coreFP, SAPMachineLayout.coreFPBase),
             (commerceCore, SAPMachineLayout.commerceBase),
             (commerceKit, SAPMachineLayout.kitBase),
-        ] {
+        ]
+        if let storeAgent {
+            images.append((try SAPMachOImage(name: "storeagent", data: storeAgent), Self.storeAgentBase))
+        }
+        for (image, base) in images {
+            try Task.checkCancellation()
             try image.relocate(loadBase: base, resolve: resolver)
             try image.load(into: engine)
         }

@@ -177,10 +177,27 @@ struct SettingsView: View {
                     viewModel.saveSettings()
                 }
             } label: {
-                Label("File Format", systemImage: "doc")
+                Label("iOS / iPadOS / tvOS / visionOS", systemImage: "iphone")
+            }
+
+            LabeledContent {
+                Picker("", selection: $viewModel.settings.defaultMacDownloadType) {
+                    ForEach(MacDownloadType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .onChange(of: viewModel.settings.defaultMacDownloadType) { _, _ in
+                    viewModel.saveSettings()
+                }
+            } label: {
+                Label("macOS", systemImage: "macbook")
             }
         } header: {
             Text("Downloads")
+        } footer: {
+            Text("For macOS, .pkg keeps the installer, .app extracts the application without installing it, and .zip archives that application. For other platforms, .zip contains the same app archive as .ipa.")
         }
     }
 

@@ -38,7 +38,10 @@ indicates validation and patching; the job completes only when the file is ready
 Jobs wait for their original account and storefront. Interrupted jobs survive an
 app restart and can be retried; retry starts a fresh transfer, not a byte-level resume.
 Authentication tokens are not stored in the queue journal. A failed transfer or
-package preparation preserves an existing destination file. macOS downloads use `.pkg`.
+package preparation preserves an existing destination file. macOS downloads can
+be saved as `.pkg`, an extracted `.app`, or a `.zip` containing that application.
+Choose the format in Settings. Extraction does not install or launch the app.
+For `.app` downloads, **Show Package Contents** opens the contents in Finder.
 
 <br>
 
@@ -118,7 +121,10 @@ None of this replaces getting proper authorization before testing an app you don
 ## Settings
 
 - **Account** — profile summary, App Store region/storefront picker, sign out.
-- **Downloads** — where IPAs are saved, and whether they're kept as `.ipa` or `.zip`.
+- **Downloads** — save location and separate format preferences: `.ipa` or `.zip`
+  for iOS/iPadOS/tvOS/visionOS; `.pkg`, `.app`, or `.zip` for macOS. On macOS,
+  `.zip` contains the extracted `.app`; on other platforms it contains the same
+  archive as `.ipa`. Existing macOS settings continue to use `.pkg` until changed.
 - **Search** — result limit (5/50/100/200), search-history toggle, and a "Clear Search History" action.
 - **Tools** — detect, install, or remove optional disassemblers, MITM proxies, Frida utilities, and device tools through Homebrew/pip; commercial tools open their vendor download page instead.
 - **About** — app version, a manual GitHub update check, and a link to the source repository.

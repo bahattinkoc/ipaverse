@@ -414,14 +414,16 @@ final class AppStoreService: AppStoreServiceProtocol {
 
         if result.success, let modelContext {
             result.version = try await LibraryRepository.recordDownload(app: app, filePath: result.destinationPath,
-                version: downloadedVersion, externalVersionID: externalVersionId, context: modelContext)
+                version: result.version ?? downloadedVersion, externalVersionID: externalVersionId, context: modelContext)
         }
 
         return result
     }
 
-    private func downloadItem(app: AppStoreApp, account: Account, versionID: String? = nil) async throws -> [String: Any] {
-        let deviceID = try await getDeviceIdentifier()
+    private func downloadItem(app: AppStoreApp, account: Account, versionID: String? = nil, deviceID suppliedDeviceID: String? = nil) async throws -> [String: Any] {
+        let deviceID: String
+        if let suppliedDeviceID { deviceID = suppliedDeviceID }
+        else { deviceID = try await getDeviceIdentifier() }
         let guid = deviceID.replacingOccurrences(of: ":", with: "").uppercased()
         let podPrefix = account.pod.map { "p\($0)-" } ?? ""
         guard let url = URL(string: "https://\(podPrefix)\(Constant.privateAppStoreAPIDomain)\(Constant.privateAppStoreAPIPathDownload)?guid=\(guid)") else {
@@ -487,19 +489,20 @@ final class AppStoreService: AppStoreServiceProtocol {
     }
 
     private func performDownload(app: AppStoreApp, account: Account, outputPath: String?, externalVersionId: String? = nil, progress: ((Double, Int64, Int64) -> Void)? = nil) async throws -> DownloadOutput {
-        let firstItem = try await downloadItem(app: app, account: account, versionID: externalVersionId)
+        let deviceID = try await getDeviceIdentifier()
+        let firstItem = try await downloadItem(app: app, account: account, versionID: externalVersionId, deviceID: deviceID)
         guard let downloadURLString = firstItem["URL"] as? String,
               let downloadURL = URL(string: downloadURLString),
               ["https", "http"].contains(downloadURL.scheme ?? ""), downloadURL.host != nil else {
             throw AppStoreDownloadProductError.invalidResponse
         }
 
-        let sinfsRaw = firstItem["sinfs"] as? [Any] ?? []
-        print("🔐 [IPAPatcher] sinfs in API response: \(sinfsRaw.count)")
+        let macDPInfo = app.platform == .macos ? try MacPackage.dpInfo(from: firstItem) : nil
+        let macHardwareID = app.platform == .macos ? try MacPackage.hardwareID(guid: deviceID) : nil
+        let sinfsRaw = app.platform == .macos ? [] : firstItem["sinfs"] as? [Any] ?? []
         let sinfs: [SinfData] = sinfsRaw.compactMap { item in
             guard let dict = item as? [String: Any],
                   let rawData = dict["sinf"] as? Data else {
-                print("🔐 [IPAPatcher] sinf item skipped — unexpected format: \(item)")
                 return nil
             }
             let id: Int64
@@ -508,17 +511,28 @@ final class AppStoreService: AppStoreServiceProtocol {
             else { id = 0 }
             return SinfData(id: id, data: rawData)
         }
-        print("🔐 [IPAPatcher] parsed sinfs: \(sinfs.count)")
 
-        let packageExtension = app.platform == .macos ? "pkg" : "ipa"
+        let packageExtension = SettingsModel.load().fileExtension(for: app.platform)
         let destinationPath = outputPath ?? "\(app.bundleID ?? "")_\(app.id ?? 0)_\(app.version ?? "").\(packageExtension)"
         let destinationURL = URL(fileURLWithPath: destinationPath)
+        let macFormat = MacDownloadType(rawValue: destinationURL.pathExtension.lowercased())
+        if app.platform == .macos, macFormat == nil { throw MacPackageExportError.unsupportedFormat }
+        var preparedVersion: String?
         var request = URLRequest(url: downloadURL)
         request.setValue(Constant.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         setDSIDHeaders(account.directoryServicesID, on: &request)
         try await PackageDownload.fetch(request: request, session: session, destination: destinationURL, progress: progress) { staged in
-            try PackageDownload.validate(staged, isMacPackage: app.platform == .macos)
-            if app.platform != .macos {
+            if let macDPInfo, let macHardwareID, let macFormat {
+                do {
+                    try await MacPackage.prepare(staged, hardwareID: macHardwareID, dpInfo: macDPInfo)
+                    preparedVersion = try MacPackageExport.prepare(staged, format: macFormat, bundleID: app.bundleID)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    throw PackageDownloadError.preparation(error.localizedDescription)
+                }
+            } else {
+                try PackageDownload.validate(staged, isMacPackage: false)
                 do {
                     try IPAPatcher().applyPatches(ipaPath: staged.path, sinfs: sinfs, email: account.email)
                     try PackageDownload.validate(staged, isMacPackage: false)
@@ -527,7 +541,7 @@ final class AppStoreService: AppStoreServiceProtocol {
                 }
             }
         }
-        return DownloadOutput(destinationPath: destinationPath, success: true, error: nil)
+        return DownloadOutput(destinationPath: destinationPath, success: true, error: nil, version: preparedVersion)
     }
 
     // MARK: - List Versions

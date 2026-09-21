@@ -3,6 +3,7 @@
 
 #include <zlib.h>
 #include <bzlib.h>
+#include "Services/MacPackageXAR.h"
 #include "SAPUnicornShim.h"
 #include "frida-core.h"
 #import "Services/IPAAssetCatalogReader.h"

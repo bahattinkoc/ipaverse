@@ -10,6 +10,7 @@
 		6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A02E42B9470094874D /* libz.tbd */; };
 		6B87C4A32E42B9470094875B /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A22E42B9470094875A /* libbz2.tbd */; };
 		6B87C4A52E42B9470094875D /* libunicorn.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6B87C4A42E42B9470094875C /* libunicorn.a */; };
+		A26000000000000000000001 /* libxar.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A26000000000000000000002 /* libxar.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +29,7 @@
 		6B87C4A22E42B9470094875A /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		6B87C4A42E42B9470094875C /* libunicorn.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libunicorn.a; path = Vendor/unicorn/lib/libunicorn.a; sourceTree = SOURCE_ROOT; };
 		A25000000000000000000001 /* WorkspaceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = WorkspaceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A26000000000000000000002 /* libxar.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libxar.tbd; path = usr/lib/libxar.tbd; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +51,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6B87C4A12E42B9470094874D /* libz.tbd in Frameworks */,
+				A26000000000000000000001 /* libxar.tbd in Frameworks */,
 				6B87C4A32E42B9470094875B /* libbz2.tbd in Frameworks */,
 				6B87C4A52E42B9470094875D /* libunicorn.a in Frameworks */,
 			);
@@ -87,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				6B87C4A02E42B9470094874D /* libz.tbd */,
+				A26000000000000000000002 /* libxar.tbd */,
 				6B87C4A22E42B9470094875A /* libbz2.tbd */,
 				6B87C4A42E42B9470094875C /* libunicorn.a */,
 			);

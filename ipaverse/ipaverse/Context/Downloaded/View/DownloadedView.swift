@@ -222,6 +222,13 @@ struct DownloadedView: View {
         Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.filePath)]) } label: {
             Label("Show in Finder", systemImage: "folder")
         }.disabled(!available)
+        if app.platform == AppPlatform.macos.rawValue, URL(fileURLWithPath: app.filePath).pathExtension.lowercased() == "app" {
+            Button {
+                NSWorkspace.shared.open(URL(fileURLWithPath: app.filePath).appendingPathComponent("Contents", isDirectory: true))
+            } label: {
+                Label("Show Package Contents", systemImage: "folder.badge.gearshape")
+            }.disabled(!available)
+        }
         Button { relink(app) } label: { Label("Locate File…", systemImage: "folder.badge.questionmark") }
             .disabled(!app.supportsIPAOperations)
         Button { openWindow(id: "resign", value: app.id) } label: { Label("Edit & Resign", systemImage: "signature") }

@@ -115,11 +115,12 @@ struct SearchView: View {
             Task { @MainActor in
                 guard loginViewModel.currentAccount == active else { queueMessage = "The active account changed. Select the apps again."; return }
                 var count = 0
+                let settings = SettingsModel.load()
                 do {
                     for app in apps {
                         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
                         let stem = (app.bundleID ?? String(app.id ?? 0)).unicodeScalars.map { allowed.contains($0) ? String($0) : "_" }.joined()
-                        let ext = app.platform == .macos ? "pkg" : SettingsModel.load().defaultDownloadType.rawValue
+                        let ext = settings.fileExtension(for: app.platform)
                         var candidate = directory.appendingPathComponent(stem + "." + ext)
                         var suffix = 1
                         while FileManager.default.fileExists(atPath: candidate.path) || DownloadQueue.shared.jobs.contains(where: { $0.destination == candidate.path }) {

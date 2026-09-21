@@ -57,6 +57,14 @@ enum SAPAssets {
     private static let payloadBZOffset: UInt64 = 0x352F40D5
     private static let payloadCPIOSkip = 0x3A4
 
+    // Profile and entry offsets must stay paired with IPAtool's StoreAgent runtime.
+    private static let storeAgentSpec = FileSpec(
+        name: "storeagent",
+        path: "./System/Library/PrivateFrameworks/CommerceKit.framework/Versions/A/Resources/storeagent",
+        size: 2580176,
+        digestHex: "70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59"
+    )
+
     private static let requiredFiles: [FileSpec] = [
         FileSpec(
             name: "CommerceKit",
@@ -87,6 +95,7 @@ enum SAPAssets {
     // MARK: - Load
 
     static func load() async throws -> SAPAssetBundle {
+        try Task.checkCancellation()
         let directory = try cacheDirectory()
 
         if let bundle = try? readCache(at: directory) {
@@ -101,6 +110,38 @@ enum SAPAssets {
     // MARK: - Download
 
     private static func download() async throws -> SAPAssetBundle {
+        let found = try await downloadFiles(requiredFiles)
+        let bundle = SAPAssetBundle(
+            commerceKit: found["CommerceKit"]!, commerceCore: found["CommerceCore"]!,
+            coreFP: found["CoreFP"]!, coreFPICXS: found["CoreFP.icxs"]!
+        )
+        try validate(bundle)
+        return bundle
+    }
+
+    static func loadStoreAgent() async throws -> Data {
+        try Task.checkCancellation()
+        let directory = try cacheDirectory().deletingLastPathComponent().appendingPathComponent("apple-storeagent-v1")
+        let url = directory.appendingPathComponent(storeAgentSpec.name)
+        if let data = try? Data(contentsOf: url), (try? verifyStoreAgent(data)) != nil { return data }
+        let files = try await downloadFiles([storeAgentSpec])
+        let data = files[storeAgentSpec.name]!
+        try verifyStoreAgent(data)
+        try Task.checkCancellation()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return data
+    }
+
+    static func verifyStoreAgent(_ data: Data) throws {
+        guard data.count == storeAgentSpec.size,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == storeAgentSpec.digestHex else {
+            throw SAPAssetsError.integrityCheckFailed(storeAgentSpec.name)
+        }
+    }
+
+    private static func downloadFiles(_ specs: [FileSpec]) async throws -> [String: Data] {
         let (absoluteOffset, _) = try await SAPXARReader.locate(name: payloadEntryName, in: updateURL)
         let rangeStart = absoluteOffset + payloadBZOffset
 
@@ -122,24 +163,34 @@ enum SAPAssets {
         try await byteSource.skip(payloadCPIOSkip)
 
         let cpio = SAPCPIOReader(source: byteSource)
-        var wanted = Dictionary(uniqueKeysWithValues: requiredFiles.map { ($0.path, $0) })
+        var wanted = Dictionary(uniqueKeysWithValues: specs.map { ($0.path, $0) })
         var found: [String: Data] = [:]
 
         // `wanted` shrinks by one on every match, so comparing `found.count`
         // against it (rather than the fixed `requiredFiles.count`) would
         // make the loop exit after finding exactly half of the targets.
-        while found.count < requiredFiles.count {
+        while found.count < specs.count {
+            try Task.checkCancellation()
             guard let entry = try await cpio.next() else { break }
 
             guard let spec = wanted[entry.path] else {
-                _ = try await cpio.read(upTo: entry.size)
+                var remaining = entry.size
+                while remaining > 0 {
+                    try Task.checkCancellation()
+                    let chunk = try await cpio.read(upTo: min(remaining, 64 * 1024))
+                    guard !chunk.isEmpty else { throw SAPByteSourceError.unexpectedEndOfStream }
+                    remaining -= chunk.count
+                }
                 continue
             }
+
+            guard entry.size == spec.size else { throw SAPAssetsError.integrityCheckFailed(spec.name) }
 
             var collected = Data()
             collected.reserveCapacity(entry.size)
             while collected.count < entry.size {
-                let chunk = try await cpio.read(upTo: entry.size - collected.count)
+                try Task.checkCancellation()
+                let chunk = try await cpio.read(upTo: min(entry.size - collected.count, 64 * 1024))
                 if chunk.isEmpty { break }
                 collected.append(contentsOf: chunk)
             }
@@ -148,19 +199,12 @@ enum SAPAssets {
             wanted.removeValue(forKey: entry.path)
         }
 
-        let missing = requiredFiles.map(\.name).filter { found[$0] == nil }
+        let missing = specs.map(\.name).filter { found[$0] == nil }
         guard missing.isEmpty else {
             throw SAPAssetsError.missingFiles(missing)
         }
 
-        let bundle = SAPAssetBundle(
-            commerceKit: found["CommerceKit"]!,
-            commerceCore: found["CommerceCore"]!,
-            coreFP: found["CoreFP"]!,
-            coreFPICXS: found["CoreFP.icxs"]!
-        )
-        try validate(bundle)
-        return bundle
+        return found
     }
 
     // MARK: - Validation

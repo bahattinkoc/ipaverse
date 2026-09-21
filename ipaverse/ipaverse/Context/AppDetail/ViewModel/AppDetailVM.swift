@@ -129,18 +129,18 @@ final class AppDetailVM: ObservableObject {
         let savePanel = NSSavePanel()
         savePanel.title = "Save App File"
         savePanel.canCreateDirectories = true
+        savePanel.treatsFilePackagesAsDirectories = false
 
-        let settings = UserDefaults.standard.data(forKey: "UserSettings")
-            .flatMap { try? JSONDecoder().decode(SettingsModel.self, from: $0) }
-        let fileExtension = app.platform == .macos ? "pkg" : (settings?.defaultDownloadType ?? .ipa).rawValue
+        let settings = SettingsModel.load()
+        let fileExtension = settings.fileExtension(for: app.platform)
         let versionLabel = selectedDisplayVersion ?? selectedVersionId ?? app.version ?? ""
         savePanel.nameFieldStringValue = "\(app.bundleID ?? "")_\(versionLabel).\(fileExtension)"
 
         if let contentType = UTType(filenameExtension: fileExtension) {
             savePanel.allowedContentTypes = [contentType]
         }
-        if let path = settings?.defaultDownloadPath, !path.isEmpty {
-            savePanel.directoryURL = URL(fileURLWithPath: path)
+        if !settings.defaultDownloadPath.isEmpty {
+            savePanel.directoryURL = URL(fileURLWithPath: settings.defaultDownloadPath)
         }
 
         savePanel.begin { [weak self] response in

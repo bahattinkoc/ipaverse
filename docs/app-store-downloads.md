@@ -1,5 +1,73 @@
 # App Store download responses
 
+## macOS package preparation
+
+Native Mac App Store downloads can contain encrypted package bytes. Validating
+those bytes as a plain XAR archive rejects a complete download. The Mac path now
+retains `sinfs[].dpInfo` and decodes the exact GUID used for the download metadata
+request into the hardware ID. Missing or conflicting decryption metadata is
+rejected before downloading; explicit `software-platform=macos` takes precedence
+over a universal app's `product-type=ios-app` classification.
+
+After transfer, an isolated SAP runtime loads Apple's StoreAgent alongside the
+existing CommerceKit/CoreFP assets. StoreAgent comes from the same Apple update
+payload, is cached separately, and is checked against a pinned size and SHA-256
+both when loaded and before emulation. Its extra synchronization shims are enabled
+only for this runtime. Apple binaries are downloaded from Apple, not bundled.
+
+The package is decrypted in full 32 KiB blocks plus a final partial block, with
+cancellation checks between blocks. The session and files must close successfully,
+then libxar validates the TOC and entry checksums without extracting or executing
+the installer. Only then does the existing atomic save replace the destination.
+Failures remove staging files and preserve the previous package. Mac packages do
+not pass through the IPA patcher, and dpInfo/SINF values are redacted from logs.
+
+This ports the relevant package preparation flow from
+[IPAtool's macOS downloader](https://github.com/majd/ipatool/blob/main/pkg/appstore/appstore_download_macos.go),
+[StoreAgent runtime](https://github.com/majd/ipatool/blob/main/internal/sap/machine/storeagent.go), and
+[pinned asset profile](https://github.com/majd/ipatool/blob/main/internal/sap/assets/storeagent.go).
+Its MIT notice is included in the app's ThirdPartyNotices resources.
+
+`MacPackageTests` covers metadata/identity handling, image verification, short
+reads and final blocks, cancellation, corrupt/truncated XARs, atomic publication,
+and preservation on decryption, close, and validation failures. Fixtures use a
+synthetic reversible transform for package bytes; they do not prove a live Apple
+package can be decrypted. Live latest/historical RocketSim and SimKit downloads
+remain a manual validation step. This change does not implement unrelated IPAtool
+features or automatic fallback from a Mac selection to an iOS package.
+
+## Saved formats
+
+Settings keeps separate preferences for iOS/iPadOS/tvOS/visionOS (`.ipa`, `.zip`)
+and macOS (`.pkg`, `.app`, `.zip`). Existing mobile preferences are preserved;
+the new Mac preference defaults to `.pkg`, matching previous behavior. Both the
+single-download save panel and batch downloads use these preferences. A queued
+job's destination extension fixes its format, so changing Settings does not change
+pending jobs or retries.
+
+For macOS `.app` and `.zip`, the decrypted, verified package is expanded with
+`pkgutil --expand-full` in a temporary workspace. No installer scripts run. The
+exporter selects one outer application matching the requested bundle ID; nested
+helpers stay inside their application. Ambiguous or missing apps are rejected.
+Internal symbolic links and executable permissions are preserved; links outside
+the bundle are rejected. A Mac `.zip` contains the extracted `.app`, not a renamed
+installer. On the other platforms, `.ipa` and `.zip` are the same patched ZIP
+archive with different extensions.
+
+An extracted `.app` replaces the destination atomically, including an existing
+nonempty app bundle. Library metadata uses the extracted app's version, actual
+file sizes, and a deterministic bundle hash. Its context menu offers **Show
+Package Contents**, which opens the Contents folder in Finder without launching
+the application. IPA-specific editing and installation actions remain limited to
+IPA-compatible downloads.
+
+`MacPackageExportTests` uses synthetic installers to exercise all three Mac
+outputs, preservation of executable permissions and links, installer-script
+nonexecution, bundle selection, atomic replacement, cancellation, and migration
+of older settings.
+
+## Metadata requests
+
 Downloading, version listing and version metadata share `AppStoreDownloadProduct`.
 The primary request remains the account pod's `volumeStoreDownloadProduct`, with
 `serialNumber: "0"` and `externalVersionId` when the user selects a version.

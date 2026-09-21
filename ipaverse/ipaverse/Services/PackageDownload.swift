@@ -15,7 +15,7 @@ enum PackageDownloadError: LocalizedError {
 enum PackageDownload {
     static func fetch(request: URLRequest, session: URLSession, destination: URL,
                       progress: ((Double, Int64, Int64) -> Void)?,
-                      prepare: (URL) throws -> Void) async throws {
+                      prepare: (URL) async throws -> Void) async throws {
         // The async download convenience API does not deliver download-delegate
         // progress through its task delegate. Count streamed bytes explicitly.
         let (bytes, response) = try await session.bytes(for: request)
@@ -61,7 +61,7 @@ enum PackageDownload {
         // EOF supplies a real total even if the server omitted Content-Length.
         progress?(1, written, total > 0 ? total : written)
         try Task.checkCancellation()
-        try prepare(staged)
+        try await prepare(staged)
         try AtomicFile.commit(staged, to: destination)
     }
 
@@ -94,10 +94,7 @@ enum PackageDownload {
     static func validate(_ file: URL, isMacPackage: Bool) throws {
         try Task.checkCancellation()
         if isMacPackage {
-            let handle = try FileHandle(forReadingFrom: file)
-            defer { try? handle.close() }
-            guard try handle.read(upToCount: 4) == Data("xar!".utf8) else { throw PackageDownloadError.invalidPackage }
-            _ = try ProcessRunner.run("/usr/bin/xar", ["-tf", file.path])
+            try MacPackage.validate(file)
         } else {
             try IPASecurityScanner.validateArchiveLimits(ipaPath: file.path)
             _ = try ProcessRunner.run("/usr/bin/unzip", ["-tqq", file.path])

@@ -19,6 +19,12 @@
 import Foundation
 
 extension SAPShims {
+    // Only enabled for StoreAgent; leave the authentication runtime's imports unchanged.
+    func registerStoreAgentServices() throws {
+        try addAliases(["_pthread_rwlock_rdlock", "_pthread_rwlock_rdlock$UNIX2003",
+                        "_pthread_mutex_init", "_pthread_mutex_destroy", "_pthread_rwlock_destroy"], returnZero)
+    }
+
     private static let fakeHandle = UInt64.max
     private static let coreFPFile: UInt64 = 3
     private static let coreFPPath = "/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP"

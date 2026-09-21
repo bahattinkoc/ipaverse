@@ -10,12 +10,14 @@ import Foundation
 struct SettingsModel: Codable {
     var defaultDownloadPath: String
     var defaultDownloadType: DownloadType
+    var defaultMacDownloadType: MacDownloadType
     var searchHistoryEnabled: Bool
     var searchResultLimit: SearchResultLimit
 
     init() {
         defaultDownloadPath = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? ""
         defaultDownloadType = .ipa
+        defaultMacDownloadType = .pkg
         searchHistoryEnabled = true
         searchResultLimit = .fifty
     }
@@ -27,11 +29,16 @@ struct SettingsModel: Codable {
         let fallback = SettingsModel()
         defaultDownloadPath = try container.decodeIfPresent(String.self, forKey: .defaultDownloadPath) ?? fallback.defaultDownloadPath
         defaultDownloadType = try container.decodeIfPresent(DownloadType.self, forKey: .defaultDownloadType) ?? fallback.defaultDownloadType
+        defaultMacDownloadType = try container.decodeIfPresent(MacDownloadType.self, forKey: .defaultMacDownloadType) ?? fallback.defaultMacDownloadType
         searchHistoryEnabled = try container.decodeIfPresent(Bool.self, forKey: .searchHistoryEnabled) ?? fallback.searchHistoryEnabled
         searchResultLimit = try container.decodeIfPresent(SearchResultLimit.self, forKey: .searchResultLimit) ?? fallback.searchResultLimit
     }
 
     static let storageKey = "UserSettings"
+
+    func fileExtension(for platform: AppPlatform?) -> String {
+        platform == .macos ? defaultMacDownloadType.rawValue : defaultDownloadType.rawValue
+    }
 
     /// Loads the persisted settings, or defaults if none/undecodable.
     static func load() -> SettingsModel {
@@ -63,4 +70,10 @@ enum DownloadType: String, CaseIterable, Codable {
         case .zip: ".zip"
         }
     }
+}
+
+enum MacDownloadType: String, CaseIterable, Codable {
+    case pkg, app, zip
+
+    var displayName: String { "." + rawValue }
 }
