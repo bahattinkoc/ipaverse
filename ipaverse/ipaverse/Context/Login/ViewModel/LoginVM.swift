@@ -25,6 +25,7 @@ final class LoginVM: ObservableObject {
     @Published var rememberMe: Bool = true
     @Published var showAuthCodeField: Bool = false
     @Published var twoFactorPhoneHint: String? = nil
+    @Published var canSendCodeBySMS: Bool = false
     @Published var errorMessage: String = ""
     @Published var toastMessage: String = ""
     @Published var isEmailValid: Bool = true
@@ -101,6 +102,7 @@ final class LoginVM: ObservableObject {
             showAuthCodeField = true
             loginState = .requires2FA
             twoFactorPhoneHint = maskedPhone
+            canSendCodeBySMS = appStoreService.canSendTwoFactorCodeBySMS
             errorMessage = ""
 
         } catch LoginError.invalidAuthCode {
@@ -136,17 +138,27 @@ final class LoginVM: ObservableObject {
     /// code — that used to send a full fresh authentication to gsa.apple.com just to
     /// ask for another code, which could itself come back rate-limited.
     func resendAuthCode() async {
+        await requestAuthCode { try await $0.resendTwoFactorCode() }
+    }
+
+    /// Switches a trusted-device sign-in to a code sent by text message.
+    func sendCodeBySMS() async {
+        await requestAuthCode { try await $0.sendTwoFactorCodeBySMS() }
+    }
+
+    private func requestAuthCode(_ send: (AppStoreServiceProtocol) async throws -> String?) async {
         guard !isLoading else { return }
         loginState = .loading
         errorMessage = ""
         authCode = ""
 
         do {
-            let info = try await appStoreService.resendTwoFactorCode()
+            let maskedPhone = try await send(appStoreService)
             showAuthCodeField = true
             loginState = .requires2FA
-            twoFactorPhoneHint = info.maskedPhone
-            toastMessage = info.maskedPhone.map { "A new verification code was sent to \($0)." }
+            twoFactorPhoneHint = maskedPhone
+            canSendCodeBySMS = appStoreService.canSendTwoFactorCodeBySMS
+            toastMessage = maskedPhone.map { "A new verification code was sent to \($0)." }
                 ?? "A new verification code was sent to your trusted devices."
 
         } catch {
@@ -349,6 +361,7 @@ final class LoginVM: ObservableObject {
         rememberMe = true
         showAuthCodeField = false
         twoFactorPhoneHint = nil
+        canSendCodeBySMS = false
         errorMessage = ""
         isEmailValid = true
         isPasswordValid = true

@@ -78,8 +78,8 @@ struct LoginView: View {
 
     private var signInServiceNotice: some View {
         let mode = AnisetteConfiguration.Mode(rawValue: anisetteMode) ?? .automatic
-        let host = URLComponents(string: anisetteServer)?.host
-        let service = host == "ani.sidestore.zip" ? "SideStore" : (host ?? "the configured service")
+        let host = URLComponents(string: AnisetteConfiguration.resolvedServer(anisetteServer))?.host
+        let service = host ?? "the configured service"
         return Group {
             if mode != .local {
                 Text(mode == .remote
@@ -308,6 +308,16 @@ struct LoginView: View {
                     .foregroundColor(.secondary.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
+
+                if viewModel.canSendCodeBySMS {
+                    Button("Text me a code instead") {
+                        Task { await viewModel.sendCodeBySMS() }
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12, weight: .medium))
+                    .disabled(viewModel.isLoading)
+                    .frame(maxWidth: .infinity)
+                }
             }
         }
         .padding(.vertical, 8)

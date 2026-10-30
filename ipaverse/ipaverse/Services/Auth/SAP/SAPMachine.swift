@@ -54,6 +54,25 @@ extension SAPMachine {
         return value
     }
 
+    /// Account and hardware bound FairPlay data for the bag's ent/download endpoint.
+    /// It needs only the global context, not a decryption session (IPAtool 3411d57).
+    func generateKBSync(hardwareID: [UInt8], dsid: UInt64) throws -> [UInt8] {
+        try Task.checkCancellation()
+        let global = try initializeStoreGlobal(hardwareID: hardwareID)
+        beginCall()
+        defer { clearScratch() }
+        let pointer = try scratch(nil, 8)
+        // StoreAgent writes a UInt32 length. The zeroed upper half keeps consumeOutput's checks.
+        let length = try scratch(nil, 8)
+        let status = Int32(truncatingIfNeeded: try invoke(Self.storeAgentBase + 0x0c93c0, [UInt64(global), dsid, 0, 1, pointer, length]))
+        // Dispose of any output before reporting the status.
+        let output = Result { try consumeOutput(pointerField: pointer, lengthField: length) }
+        guard status == 0 else { throw SAPMachineError.unexpectedStatus("StoreAgent kbsync", status) }
+        let kbsync = try output.get()
+        guard !kbsync.isEmpty else { throw SAPMachineError.nullOutputPointer }
+        return kbsync
+    }
+
     func decryptStoreChunk(session: UInt64, data: Data) throws -> Data {
         try Task.checkCancellation()
         beginCall()

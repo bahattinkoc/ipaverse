@@ -5,6 +5,7 @@ private func expect(_ value: Bool, _ message: String) throws {
 }
 private struct Failure: Error { let message: String }
 private let testServer = URL(string: "https://anisette.example.invalid:8443/service")!
+private let serverClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
 private func json(_ value: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
 private func plist(_ value: [String: Any]) throws -> Data {
     try PropertyListSerialization.data(fromPropertyList: value, format: .xml, options: 0)
@@ -35,10 +36,10 @@ private actor RemoteMock: AnisetteRemoteSource {
     func provision(server: URL) async throws -> AnisetteIdentity {
         provisionCount += 1
         try await Task.sleep(nanoseconds: 5_000_000)
-        return AnisetteIdentity(version: 1, server: server, localUserID: "remote-user",
+        return AnisetteIdentity(version: AnisetteIdentity.currentVersion, server: server, localUserID: "remote-user",
                                 deviceID: UUID().uuidString, clientInfo: "remote-client", provisioningData: "saved-adi")
     }
-    func headers(for identity: AnisetteIdentity) async throws -> [String: String] {
+    func headers(for identity: AnisetteIdentity, sim: String?) async throws -> [String: String] {
         headerCount += 1
         if failHeaders { throw AnisetteError.http(503) }
         var result = fixtureHeaders("remote-\(headerCount)")
@@ -47,6 +48,13 @@ private actor RemoteMock: AnisetteRemoteSource {
         result["X-Mme-Client-Info"] = identity.clientInfo
         return result
     }
+}
+
+private final class SIMRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+    var values: [String] { lock.withLock { recorded } }
+    func append(_ sim: String) { lock.withLock { recorded.append(sim) } }
 }
 
 private final class SocketMock: AnisetteSocket, @unchecked Sendable {
@@ -105,6 +113,8 @@ private final class TransportMock: AnisetteTransport, @unchecked Sendable {
 
 private func appleFixture(_ request: URLRequest) throws -> Data {
     switch request.url!.lastPathComponent {
+    case "client_info":
+        return try json(["client_info": serverClientInfo, "user_agent": "akd/1.0 CFNetwork/808.1.4"])
     case "lookup":
         return try plist(["urls": ["midStartProvisioning": "https://gsa.apple.com/start",
                                    "midFinishProvisioning": "https://gsa.apple.com/finish"]])
@@ -153,6 +163,12 @@ private final class AppleURLProtocol: URLProtocol, @unchecked Sendable {
             data = try! plist(["Response": ["Status": ["ec": 0], "s": Data(repeating: 1, count: 16),
                                             "B": Data(repeating: 3, count: 256), "i": 2,
                                             "sp": "s2k", "c": "fixture-session-cookie"]])
+        }
+        let otp = (operation?["cpd"] as? [String: Any])?["X-Apple-I-MD"] as? String
+        if operation?["u"] as? String == "resync-always@example.invalid" ||
+            (operation?["u"] as? String == "resync@example.invalid" && otp != "resynced-otp") {
+            data = try! plist(["Response": ["Status": ["ec": -22421, "em": "resync", "hsc": 434,
+                                                       "X-Apple-I-MD-DATA": Data("apple-sim".utf8)]]])
         }
         let identity = request.value(forHTTPHeaderField: "X-Apple-Identity-Token")
         if identity == "sms-rate-limited-identity", request.url!.lastPathComponent == "trusteddevice" {
@@ -250,6 +266,11 @@ private enum AnisetteTests {
             let saved = AnisetteConfiguration.load(from: defaults)
             try expect(saved.mode == mode && saved.server == testServer.absoluteString, "Existing sign-in preferences overwritten")
         }
+        for retired in ["https://ani.sidestore.zip", "https://ANI.sidestore.zip/"] {
+            defaults.setVolatileDomain([AnisetteConfiguration.serverKey: retired], forName: UserDefaults.argumentDomain)
+            try expect(AnisetteConfiguration.load(from: defaults).server == AnisetteConfiguration.defaultServer,
+                       "A saved retired default must resolve to the current default server")
+        }
         defaults.setVolatileDomain([AnisetteConfiguration.modeKey: "unknown"], forName: UserDefaults.argumentDomain)
         try expect(AnisetteConfiguration.load(from: defaults).mode == .automatic, "Invalid mode must use automatic default")
         defaults.removeVolatileDomain(forName: UserDefaults.argumentDomain)
@@ -273,38 +294,30 @@ private enum AnisetteTests {
     }
 
     static func clientIdentifierTests() async throws {
-        let host = "<Mac17,8> <macOS;26.6.2;25G83>"
-        let compatible = "\(host) <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-        for version in ["25183.54.10", "3594.4.19"] {
-            let legacy = "\(host) <com.apple.AuthKit/1 (com.apple.dt.Xcode/\(version))>"
-            try expect(AnisetteClientInfo.replacingLegacyIdentifier(in: legacy) == compatible, "Legacy client token not updated")
-        }
-        try expect(AnisetteClientInfo.replacingLegacyIdentifier(in: compatible) == compatible, "Client migration is not idempotent")
-        let other = "\(host) <com.apple.AOSKit/282 (com.apple.accountsd/113)>"
-        try expect(AnisetteClientInfo.replacingLegacyIdentifier(in: other) == other, "Unrelated client identifier changed")
         try expect(AnisetteClientInfo.current.contains("com.apple.akd/1.0") && !AnisetteClientInfo.current.contains("com.apple.dt.Xcode"), "New identities still advertise Xcode")
 
-        let old = AnisetteIdentity(version: 1, server: testServer, localUserID: "saved-local-id",
-                                   deviceID: UUID().uuidString,
-                                   clientInfo: "\(host) <com.apple.AuthKit/1 (com.apple.dt.Xcode/25183.54.10)>",
-                                   provisioningData: "existing-personalization")
-        let store = MemoryStore()
-        try store.save(old)
-        let remote = RemoteMock()
-        let provider = AnisetteProvider(local: { throw Failure(message: "Remote migration used local provider") }, remote: remote, store: store)
-        let session = try await provider.makeSession(configuration: .init(mode: .remote, server: testServer.absoluteString))
-        let result = try await session.headers()
-        try expect(result["X-Mme-Client-Info"] == compatible, "Saved Xcode identifier reached the session")
-        try expect(await remote.provisionCount == 0, "Client metadata update reprovisioned the device")
-        let saved = try store.load(server: testServer)!
-        try expect(saved.clientInfo == compatible && saved.deviceID == old.deviceID &&
-                   saved.localUserID == old.localUserID && saved.provisioningData == old.provisioningData &&
-                   saved.server == old.server && saved.version == old.version, "Migration changed provisioned identity data")
+        // A version 1 record holds this Mac's client info, which GSA rejects with -80045.
+        // The store must report it as missing so that the provider provisions a new identity.
+        func stored(_ version: Int, server: URL = testServer, clientInfo: String = serverClientInfo) throws -> Data {
+            try JSONEncoder().encode(AnisetteIdentity(version: version, server: server, localUserID: "saved-local-id",
+                                                      deviceID: UUID().uuidString, clientInfo: clientInfo,
+                                                      provisioningData: "existing-personalization"))
+        }
+        try expect(try AnisetteIdentity.decodeStored(stored(1), server: testServer) == nil, "Outdated identity was reused")
+        try expect(try AnisetteIdentity.decodeStored(stored(AnisetteIdentity.currentVersion), server: testServer)?.clientInfo == serverClientInfo,
+                   "Current identity was not reused")
+        do { _ = try AnisetteIdentity.decodeStored(stored(AnisetteIdentity.currentVersion + 1), server: testServer); throw Failure(message: "Future identity accepted") }
+        catch AnisetteError.invalidIdentity {}
+        do { _ = try AnisetteIdentity.decodeStored(stored(AnisetteIdentity.currentVersion, clientInfo: ""), server: testServer); throw Failure(message: "Empty client info accepted") }
+        catch AnisetteError.invalidIdentity {}
 
-        // Direct V3 consumers also get a compatible header from an older record.
+        // The server's client info reaches GSA unchanged, even when it names another platform.
+        let identity = AnisetteIdentity(version: AnisetteIdentity.currentVersion, server: testServer, localUserID: "saved-local-id",
+                                        deviceID: UUID().uuidString, clientInfo: serverClientInfo,
+                                        provisioningData: "existing-personalization")
         let client = AnisetteV3Client(transport: TransportMock(socket: try SocketMock([]), response: { try appleFixture($0) }))
-        let headers = try await client.headers(for: old)
-        try expect(headers["X-Mme-Client-Info"] == compatible, "Direct V3 header retained Xcode")
+        let headers = try await client.headers(for: identity)
+        try expect(headers["X-Mme-Client-Info"] == serverClientInfo, "Server client info was rewritten")
         try expect(headers["X-Apple-Locale"] == "en_US",
                    "V3 authentication locale includes ICU preferences that break Apple 2FA")
     }
@@ -369,13 +382,17 @@ private enum AnisetteTests {
         let last = transport.requests.last!
         let body = try JSONSerialization.jsonObject(with: last.httpBody!) as! [String: String]
         try expect(body == ["identifier": identity.localUserID, "adi_pb": "personalization"], "Unexpected data sent to server")
+        _ = try await client.headers(for: identity, sim: "apple-sim")
+        let resyncBody = try JSONSerialization.jsonObject(with: transport.requests.last!.httpBody!) as! [String: String]
+        try expect(resyncBody == ["identifier": identity.localUserID, "adi_pb": "personalization", "sim": "apple-sim",
+                                  "device_id": identity.deviceID, "md_lu": identity.localUserID], "Wrong resync request")
         for request in transport.requests {
             try expect(request.value(forHTTPHeaderField: "Cookie") == nil && request.value(forHTTPHeaderField: "Authorization") == nil, "Credentials entered provisioning transport")
             if request.url?.host == "gsa.apple.com" {
                 try expect(request.value(forHTTPHeaderField: "X-Apple-Locale") == "en_US",
                            "Provisioning locale includes ICU preferences that break Apple 2FA")
-                try expect(request.value(forHTTPHeaderField: "X-Mme-Client-Info")?.contains("com.apple.akd/1.0") == true,
-                           "Provisioning request advertised the old client identifier")
+                try expect(request.value(forHTTPHeaderField: "X-Mme-Client-Info") == serverClientInfo,
+                           "Provisioning request did not use the server's client info")
             }
         }
     }
@@ -403,13 +420,14 @@ private enum AnisetteTests {
         catch is CancellationError {}
         try expect(cancelled.isCancelled, "Cancellation did not close socket")
 
-        let hostile = TransportMock(socket: try SocketMock([])) { _ in
-            try plist(["urls": ["midStartProvisioning": "https://apple.com.evil.invalid/start",
+        let hostile = TransportMock(socket: try SocketMock([])) { request in
+            if request.url!.lastPathComponent == "client_info" { return try appleFixture(request) }
+            return try plist(["urls": ["midStartProvisioning": "https://apple.com.evil.invalid/start",
                                 "midFinishProvisioning": "https://gsa.apple.com/finish"]])
         }
         do { _ = try await AnisetteV3Client(transport: hostile).provision(server: testServer); throw Failure(message: "Untrusted provisioning URL accepted") }
         catch AnisetteError.invalidResponse("Apple provisioning URL") {}
-        try expect(hostile.requests.count == 1 && hostile.connectedURL == nil, "Contacted untrusted endpoint")
+        try expect(hostile.requests.count == 2 && hostile.connectedURL == nil, "Contacted untrusted endpoint")
     }
 
     static func gsaTests() async throws {
@@ -442,6 +460,37 @@ private enum AnisetteTests {
             } catch GSAError.serverError(503, _) {}
         }
 
+        // hsc 434: GSA asks for an anisette resync. The client resyncs once and retries once.
+        let sims = SIMRecorder()
+        let resyncing = AnisetteSession(initialHeaders: fixtureHeaders("first-otp"), refresh: { fixtureHeaders("second-otp") },
+                                        resync: { sim in sims.append(sim); return fixtureHeaders("resynced-otp") })
+        let resyncClient = GSAClient(session: urlSession, anisette: resyncing)
+        var before = AppleURLProtocol.requests.count
+        do { _ = try await resyncClient.authenticate(username: "resync@example.invalid", password: "fixture"); throw Failure(message: "Fixture login unexpectedly succeeded") }
+        catch GSAError.serverError(-20101, _) {}
+        let sent = Array(AppleURLProtocol.requests.dropFirst(before))
+        try expect(sent.count == 2, "hsc 434 was not retried exactly once")
+        let retried = try PropertyListSerialization.propertyList(from: sent[1].httpBody!, format: nil) as! [String: Any]
+        let retriedCPD = (retried["Request"] as! [String: Any])["cpd"] as! [String: Any]
+        try expect(retriedCPD["X-Apple-I-MD"] as? String == "resynced-otp", "Retry did not use the resynced headers")
+        try expect(sims.values == [Data("apple-sim".utf8).base64EncodedString()], "Resync did not receive Apple's SIM")
+
+        before = AppleURLProtocol.requests.count
+        do { _ = try await resyncClient.authenticate(username: "resync-always@example.invalid", password: "fixture"); throw Failure(message: "Repeated hsc 434 accepted") }
+        catch GSAError.serverError(-22421, _) {}
+        try expect(AppleURLProtocol.requests.count == before + 2 && sims.values.count == 2, "Repeated hsc 434 caused a resync loop")
+
+        before = AppleURLProtocol.requests.count
+        do { _ = try await gsa.authenticate(username: "resync@example.invalid", password: "fixture"); throw Failure(message: "hsc 434 accepted without resync support") }
+        catch GSAError.serverError(-22421, _) {}
+        try expect(AppleURLProtocol.requests.count == before + 1, "A source without resync retried hsc 434")
+
+        // hsc 409 without `au`: Apple already sent the code, so the client asks the user for it.
+        try expect(GSAClient.secondaryAuth(in: ["ec": 0, "hsc": 409]) == .codeAlreadySent, "hsc 409 was not treated as 2FA")
+        try expect(GSAClient.secondaryAuth(in: ["ec": 0, "hsc": 409, "au": "trustedDeviceSecondaryAuth"]) == .requestCode("trustedDeviceSecondaryAuth"),
+                   "au no longer requests a code")
+        try expect(GSAClient.secondaryAuth(in: ["ec": 0, "hsc": 200]) == GSAClient.SecondaryAuth.none, "hsc 200 required 2FA")
+
         // Reproduce both an init rejection and the reported init=200/complete=429.
         for (phase, expectedRequests) in [("init", 1), ("complete", 2)] {
             let before = AppleURLProtocol.requests.count
@@ -469,13 +518,26 @@ private enum AnisetteTests {
         for (identity, expectedRequests) in [("rate-limited-identity", 1), ("sms-rate-limited-identity", 2)] {
             let before = AppleURLProtocol.requests.count
             do {
-                _ = try await gsa.requestTwoFactorCode(identityToken: identity)
+                _ = try await gsa.requestTwoFactorCode(identityToken: identity, sendSMS: true)
                 throw Failure(message: "Claimed verification code was sent after HTTP 429")
             } catch GSAError.rateLimited {}
             try expect(AppleURLProtocol.requests.count == before + expectedRequests, "Retried rate-limited code request")
         }
+        // The verification page lists a trusted number even when the account has trusted
+        // devices; that must not text the user on top of the device prompt.
+        before = AppleURLProtocol.requests.count
+        let delivery = try await gsa.requestTwoFactorCode(identityToken: "sms-rate-limited-identity", sendSMS: false)
+        try expect(delivery == TwoFactorDelivery(trustedPhoneId: 1), "Trusted-device code request lost the SMS alternative")
+        try expect(AppleURLProtocol.requests.count == before + 1, "Trusted-device code request also sent an SMS")
+        before = AppleURLProtocol.requests.count
         do {
-            _ = try await gsa.requestTwoFactorCode(identityToken: "failure-identity")
+            _ = try await gsa.sendSMSCode(phoneId: 1, identityToken: "sms-rate-limited-identity")
+            throw Failure(message: "Claimed SMS was sent after HTTP 429")
+        } catch GSAError.rateLimited {}
+        try expect(AppleURLProtocol.requests.count == before + 1 && AppleURLProtocol.requests.last?.url?.path == "/auth/verify/phone/1/put",
+                   "SMS on request did not go straight to the phone endpoint")
+        do {
+            _ = try await gsa.requestTwoFactorCode(identityToken: "failure-identity", sendSMS: false)
             throw Failure(message: "Claimed verification code was sent after HTTP 503")
         } catch GSAError.serverError(503, _) {}
         print("PASS: GSA init/complete and all 2FA paths reject HTTP 429 without retrying")
@@ -550,7 +612,7 @@ private enum AnisetteTests {
         try expect(config.httpCookieStorage == nil && config.urlCredentialStorage == nil && !config.httpShouldSetCookies,
                    "Provisioning transport inherited credentials/cookies")
 
-        let identity = AnisetteIdentity(version: 1, server: testServer, localUserID: "user",
+        let identity = AnisetteIdentity(version: AnisetteIdentity.currentVersion, server: testServer, localUserID: "user",
                                        deviceID: UUID().uuidString, clientInfo: "client", provisioningData: "saved")
         let partial = TransportMock(socket: try SocketMock([])) { _ in try json(["X-Apple-I-MD": "only-otp"]) }
         do { _ = try await AnisetteV3Client(transport: partial).headers(for: identity); throw Failure(message: "Partial remote headers accepted") }

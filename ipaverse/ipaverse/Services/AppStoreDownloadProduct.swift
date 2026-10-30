@@ -123,13 +123,8 @@ enum AppStoreDownloadProduct {
                 try Task.checkCancellation()
                 let items = try await response(to: update, send: send)
                 guard items.count == 1, let item = items.first,
-                      let metadata = item["metadata"] as? [String: Any],
                       let requestedAppID = identifier(payload["salableAdamId"]),
-                      identifier(metadata["itemId"]) == requestedAppID,
-                      identifier(metadata["softwareVersionExternalIdentifier"]) == version,
-                      let returnedBundle = metadata["softwareVersionBundleId"] as? String,
-                      !returnedBundle.isEmpty,
-                      bundleID == nil || bundleID == "" || returnedBundle == bundleID else {
+                      isRequested(item, appID: requestedAppID, version: version, bundleID: bundleID) else {
                     throw AppStoreDownloadProductError.mismatchedUpdate
                 }
                 return item
@@ -151,6 +146,60 @@ enum AppStoreDownloadProduct {
         return components.scheme == "https" && components.host == "downloaddispatch.itunes.apple.com" &&
             components.percentEncodedPath == "/up/updateProduct" && components.user == nil &&
             components.password == nil && components.port == nil && components.query == nil && components.fragment == nil
+    }
+
+    /// Since October 2026 Apple's bag maps volumeStoreDownloadProduct to this endpoint.
+    static func isSupportedEntDownloadEndpoint(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        return components.scheme == "https" && components.host == "downloaddispatch.itunes.apple.com" &&
+            components.percentEncodedPath == "/WebObjects/DownloadDispatch.woa/wa/ent/download" && components.user == nil &&
+            components.password == nil && components.port == nil && components.query == nil && components.fragment == nil
+    }
+
+    /// ent/download takes kbsync (FairPlay data bound to the account and device), the account's
+    /// token and storefront, and a serial derived from the GUID. As sent by IPAtool 3411d57.
+    static func entDownloadRequest(endpoint: URL, appID: Int64, guid: String, hardwareID: [UInt8], versionID: String,
+                                   kbsync: String, storeFront: String, passwordToken: String, dsid: String) throws -> URLRequest {
+        guard isSupportedEntDownloadEndpoint(endpoint), hardwareID.count == 6, appID > 0, isValidVersionID(versionID),
+              var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw AppStoreDownloadProductError.invalidEndpoint
+        }
+        components.queryItems = [URLQueryItem(name: "guid", value: guid)]
+        guard let url = components.url else { throw AppStoreDownloadProductError.invalidEndpoint }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("Configurator/2.18 (Macintosh; OS X 15.3.2; 24D81) AppleWebKit/0620.2.4.11.6", forHTTPHeaderField: "User-Agent")
+        request.setValue(storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
+        request.setValue(passwordToken, forHTTPHeaderField: "X-Token")
+        request.setValue(dsid, forHTTPHeaderField: "iCloud-DSID")
+        request.setValue(dsid, forHTTPHeaderField: "X-Dsid")
+        let serial = [0x54, 0xC8, 0xB0, 0xA9, 0x88] + hardwareID[2...]
+        request.httpBody = try PropertyListSerialization.data(fromPropertyList: [
+            "creditDisplay": "", "guid": guid, "kbsync": kbsync, "salableAdamId": String(appID),
+            "serialNumber": Data(serial).base64EncodedString(), "externalVersionId": versionID
+        ], format: .xml, options: 0)
+        return request
+    }
+
+    /// Exactly one package for the requested app, version and bundle.
+    static func entDownloadItem(data: Data, response: URLResponse, appID: Int64, versionID: String, bundleID: String?) throws -> [String: Any] {
+        let items = try decode(data: data, response: response)
+        guard items.count == 1, let item = items.first,
+              isRequested(item, appID: String(appID), version: versionID, bundleID: bundleID) else {
+            throw AppStoreDownloadProductError.mismatchedUpdate
+        }
+        guard let url = item["URL"] as? String, !url.isEmpty else { throw AppStoreDownloadProductError.noItems }
+        return item
+    }
+
+    private static func isRequested(_ item: [String: Any], appID: String, version: String, bundleID: String?) -> Bool {
+        guard let metadata = item["metadata"] as? [String: Any],
+              identifier(metadata["itemId"]) == appID,
+              identifier(metadata["softwareVersionExternalIdentifier"]) == version,
+              let returnedBundle = metadata["softwareVersionBundleId"] as? String,
+              !returnedBundle.isEmpty else { return false }
+        return bundleID == nil || bundleID == "" || returnedBundle == bundleID
     }
 
     private static func identifier(_ value: Any?) -> String? {

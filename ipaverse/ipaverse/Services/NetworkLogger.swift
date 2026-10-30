@@ -6,14 +6,21 @@
 //
 
 import Foundation
+import os
 
 /// Network logger that logs all HTTP requests and responses in a detailed, formatted JSON format.
 ///
 /// Logging only ever runs in DEBUG builds, and sensitive fields (passwords, tokens, DSIDs,
 /// signatures, etc.) are redacted before printing so they never end up in Console.app,
 /// crash reports, or screen recordings even during development.
+///
+/// Entries also go through `os.Logger`, not just `print()`. A `print()` from an app launched
+/// from Finder/`/Applications` has nowhere to go, so it is invisible once the app is not
+/// attached to Xcode's debugger. `os.Logger` entries at `.notice` level persist in the unified
+/// log and can be read later with `log show --predicate 'subsystem == "com.ipaverse"'`.
 final class NetworkLogger: NSObject, @unchecked Sendable {
     static let shared = NetworkLogger()
+    private let osLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.ipaverse", category: "Network")
 
     /// Key name fragments (lowercased, separators stripped) that mark a header/body field as
     /// sensitive. Matching is substring-based, so e.g. "dsid" also catches "X-Dsid" and
@@ -21,7 +28,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
     private let sensitiveKeyPatterns: [String] = [
         "password", "token", "pet", "spd", "authcode", "securitycode",
         "dsid", "dspersonid", "directoryservicesid", "actionsignature", "secret",
-        "identitytoken", "authorization", "cookie", "setcookie", "xappleimd", "dpinfo", "sinf"
+        "identitytoken", "authorization", "cookie", "setcookie", "xappleimd", "dpinfo", "sinf", "kbsync"
     ]
 
     private let redactedPlaceholder = "***REDACTED***"
@@ -238,8 +245,12 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
         var result: [String: Any] = [:]
 
         guard let contentType = contentType?.lowercased() else {
-            // If content type is unknown, try to parse as JSON if it's text
-            if let textString = String(data: data, encoding: .utf8),
+            // If content type is unknown, try a plist first (MZFinance can omit Content-Type),
+            // then JSON if it's text
+            if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+               plist is [String: Any] || plist is [Any] {
+                result["plist"] = redactSensitiveValues(plist)
+            } else if let textString = String(data: data, encoding: .utf8),
                let jsonData = textString.data(using: .utf8),
                let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []) {
                 result["json"] = redactSensitiveValues(jsonObject)
@@ -316,5 +327,7 @@ final class NetworkLogger: NSObject, @unchecked Sendable {
         print(separator)
         print(jsonString)
         print("\(separator)\n")
+
+        osLogger.notice("NETWORK \(type, privacy: .public)\n\(jsonString, privacy: .public)")
     }
 }

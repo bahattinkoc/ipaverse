@@ -11,10 +11,22 @@ struct AnisetteIdentity: Codable, Sendable {
     let clientInfo: String
     let provisioningData: String
 
-    func updatingClientIdentifier() -> Self {
-        Self(version: version, server: server, localUserID: localUserID, deviceID: deviceID,
-             clientInfo: AnisetteClientInfo.replacingLegacyIdentifier(in: clientInfo),
-             provisioningData: provisioningData)
+    /// Version 1 records stored this Mac's client info, not the server's, so GSA rejects them
+    /// with ec=-80045. The store treats them as missing, and the provider provisions a new one.
+    static let currentVersion = 2
+
+    /// Returns nil for an outdated record, so that the caller provisions a new identity.
+    static func decodeStored(_ data: Data, server: URL) throws -> AnisetteIdentity? {
+        guard let identity = try? JSONDecoder().decode(AnisetteIdentity.self, from: data) else {
+            throw AnisetteError.invalidIdentity
+        }
+        if identity.version < currentVersion { return nil }
+        guard identity.version == currentVersion, identity.server == server,
+              !identity.localUserID.isEmpty, UUID(uuidString: identity.deviceID) != nil,
+              !identity.clientInfo.isEmpty, !identity.provisioningData.isEmpty else {
+            throw AnisetteError.invalidIdentity
+        }
+        return identity
     }
 }
 
@@ -40,14 +52,8 @@ struct AnisetteKeychainStore: AnisetteIdentityStoring {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw AnisetteError.keychain(status) }
-        guard let data = result as? Data,
-              let identity = try? JSONDecoder().decode(AnisetteIdentity.self, from: data),
-              identity.version == 1, identity.server == server,
-              !identity.localUserID.isEmpty, UUID(uuidString: identity.deviceID) != nil,
-              !identity.clientInfo.isEmpty, !identity.provisioningData.isEmpty else {
-            throw AnisetteError.invalidIdentity
-        }
-        return identity
+        guard let data = result as? Data else { throw AnisetteError.invalidIdentity }
+        return try AnisetteIdentity.decodeStored(data, server: server)
     }
 
     func save(_ identity: AnisetteIdentity) throws {

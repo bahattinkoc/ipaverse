@@ -26,11 +26,20 @@ struct GSAAccountData {
     let raw: [String: Any]    // full decrypted spd, for the App Store token bridge
 }
 
+/// Where a 2FA code was sent, and which number can receive one by SMS on request.
+struct TwoFactorDelivery: Equatable, Sendable {
+    /// Set once a code went out by SMS; the code is then validated through the phone endpoint.
+    var smsPhoneId: Int?
+    var maskedPhone: String?
+    /// The trusted number Apple's verification page offers as the SMS alternative.
+    var trustedPhoneId: Int?
+}
+
 enum GSAError: LocalizedError {
     case networkError
     case rateLimited
     case serverError(code: Int, message: String)
-    case needsTwoFactor(identityToken: String, phoneId: Int?, maskedPhone: String?)
+    case needsTwoFactor(identityToken: String, delivery: TwoFactorDelivery)
     case invalidResponse(String)
 
     var errorDescription: String? {
@@ -104,15 +113,23 @@ final class GSAClient {
         let idmsToken = (account["GsIdmsToken"] as? String) ?? ""
 
         // Detect 2FA requirement from the complete Status.
-        if let status = completeResponse["Status"] as? [String: Any],
-           let au = status["au"] as? String, !au.isEmpty {
+        let status = completeResponse["Status"] as? [String: Any] ?? [:]
+        switch Self.secondaryAuth(in: status) {
+        case .requestCode(let au):
             print("🔐 [GSA] secondary auth required: \(au)")
             let identity = Data("\(dsid):\(idmsToken)".utf8).base64EncodedString()
-            // Request a verification code. For accounts signed in on an Apple device
-            // this pushes to trusted devices; otherwise it falls back to SMS and we
-            // get back the trusted phone number id + masked number for the UI.
-            let info = try await requestTwoFactorCode(identityToken: identity)
-            throw GSAError.needsTwoFactor(identityToken: identity, phoneId: info.phoneId, maskedPhone: info.maskedPhone)
+            // `trustedDeviceSecondaryAuth` means the account has trusted devices: ask only
+            // for their prompt, as Apple's own sign-in does. SMS is sent when the account
+            // has none (`secondaryAuth`) or when the user asks for it.
+            let delivery = try await requestTwoFactorCode(identityToken: identity,
+                                                          sendSMS: au != Self.trustedDeviceSecondaryAuth)
+            throw GSAError.needsTwoFactor(identityToken: identity, delivery: delivery)
+        case .codeAlreadySent:
+            print("🔐 [GSA] secondary auth required: code already sent to trusted devices (hsc 409)")
+            let identity = Data("\(dsid):\(idmsToken)".utf8).base64EncodedString()
+            throw GSAError.needsTwoFactor(identityToken: identity, delivery: TwoFactorDelivery())
+        case .none:
+            break
         }
 
         guard !dsid.isEmpty, !idmsToken.isEmpty else {
@@ -142,8 +159,17 @@ final class GSAClient {
     /// AnisetteClientInfo). Other unparseable responses are not retried.
     private func send(request inner: [String: Any]) async throws -> [String: Any] {
         let maxAttempts = 2
-        for attempt in 1...maxAttempts {
-            let headers = try await anisette.headers()
+        var attempt = 1
+        var resynced: [String: String]?
+        var didResync = false
+        while attempt <= maxAttempts {
+            let headers: [String: String]
+            if let fresh = resynced {
+                headers = fresh
+                resynced = nil
+            } else {
+                headers = try await anisette.headers()
+            }
             var requestBody = inner
             requestBody["cpd"] = clientProvidedData(headers: headers)
             let body: [String: Any] = ["Header": ["Version": "1.0.1"], "Request": requestBody]
@@ -164,9 +190,21 @@ final class GSAClient {
                 if isTransient, attempt < maxAttempts {
                     print("🔐 [GSA] transient response (HTTP \(statusCode)) on attempt \(attempt) — retrying")
                     try await Task.sleep(nanoseconds: 1_500_000_000)
+                    attempt += 1
                     continue
                 }
                 throw GSAError.invalidResponse("unparseable GsService2 body (HTTP \(statusCode))")
+            }
+
+            // hsc 434: GSA does not trust the anisette data yet and sends resync data (the SIM).
+            // The anisette server turns the SIM into corrected headers, and the request is sent
+            // once more. The resync does not count as a transient retry.
+            if !didResync, let sim = Self.resyncSIM(in: responseDict),
+               let fresh = try await anisette.resyncedHeaders(sim: sim) {
+                print("🔐 [GSA] anisette resync required (hsc 434) — retrying with resynced headers")
+                didResync = true
+                resynced = fresh
+                continue
             }
 
             if let status = responseDict["Status"] as? [String: Any],
@@ -185,13 +223,41 @@ final class GSAClient {
         throw GSAError.invalidResponse("unparseable GsService2 body")
     }
 
+    enum SecondaryAuth: Equatable {
+        case none
+        /// `au` names a second factor, and the client must ask Apple to send a code.
+        case requestCode(String)
+        /// hsc 409 without `au`: Apple already pushed a code to the trusted devices
+        /// ("sign in to a new device"). Requesting another code is not needed.
+        case codeAlreadySent
+    }
+
+    static let trustedDeviceSecondaryAuth = "trustedDeviceSecondaryAuth"
+
+    static func secondaryAuth(in status: [String: Any]) -> SecondaryAuth {
+        if let au = status["au"] as? String, !au.isEmpty { return .requestCode(au) }
+        if (status["hsc"] as? NSNumber)?.intValue == 409 { return .codeAlreadySent }
+        return .none
+    }
+
+    /// The base64 SIM (`X-Apple-I-MD-DATA`) from a response whose Status has hsc 434, or nil.
+    static func resyncSIM(in response: [String: Any]) -> String? {
+        guard let status = response["Status"] as? [String: Any],
+              (status["hsc"] as? NSNumber)?.intValue == 434 else { return nil }
+        switch status["X-Apple-I-MD-DATA"] {
+        case let data as Data: return data.isEmpty ? nil : data.base64EncodedString()
+        case let text as String: return text.isEmpty ? nil : text
+        default: return nil
+        }
+    }
+
     // MARK: - Two-factor verification
 
-    /// Requests a verification code. Hits the trusted-device endpoint; if the
-    /// account has no trusted device, Apple offers an SMS fallback — in that case
-    /// we trigger the SMS and return the trusted phone number id (used to validate).
-    /// Returns `nil` for the trusted-device push path (no phone id).
-    func requestTwoFactorCode(identityToken: String) async throws -> (phoneId: Int?, maskedPhone: String?) {
+    /// Requests a verification code. The trusted-device endpoint prompts every trusted
+    /// device. Its page always lists the trusted phone number as the "text me instead"
+    /// option, so that number does not mean the account lacks trusted devices. An SMS is
+    /// sent only when `sendSMS` is set.
+    func requestTwoFactorCode(identityToken: String, sendSMS: Bool) async throws -> TwoFactorDelivery {
         var req = URLRequest(url: URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!)
         req.httpMethod = "GET"
         try await applyTwoFactorHeaders(&req, identityToken: identityToken)
@@ -201,14 +267,19 @@ final class GSAClient {
             throw GSAError.serverError(code: status, message: "Could not request a verification code")
         }
 
-        let body = String(decoding: data, as: UTF8.self)
-        guard let phoneId = parsePhoneId(from: body) else {
-            // No phone info → code was pushed to a trusted device.
-            return (nil, nil)
+        let phoneId = parsePhoneId(from: String(decoding: data, as: UTF8.self))
+        guard sendSMS, let phoneId else {
+            print("🔐 [GSA] code requested from trusted devices")
+            return TwoFactorDelivery(trustedPhoneId: phoneId)
         }
-        print("🔐 [GSA] no trusted device — requesting SMS to phone id \(phoneId)")
+        return try await sendSMSCode(phoneId: phoneId, identityToken: identityToken)
+    }
+
+    /// Sends a code by SMS to the trusted phone number `phoneId`.
+    func sendSMSCode(phoneId: Int, identityToken: String) async throws -> TwoFactorDelivery {
+        print("🔐 [GSA] requesting SMS to phone id \(phoneId)")
         let maskedPhone = try await requestSMSCode(phoneId: phoneId, identityToken: identityToken)
-        return (phoneId, maskedPhone)
+        return TwoFactorDelivery(smsPhoneId: phoneId, maskedPhone: maskedPhone, trustedPhoneId: phoneId)
     }
 
     /// Submits the user-entered verification code via the SMS path (if `phoneId`

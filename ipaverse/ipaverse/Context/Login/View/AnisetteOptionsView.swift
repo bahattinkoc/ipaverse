@@ -26,7 +26,7 @@ struct AnisetteOptionsView: View {
                     Text("The server receives a generated device identity and its provisioning data. Your Apple Account email, password and verification codes are not sent to this server. Use a server you trust.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Text("The default server is operated by SideStore. You can enter your own HTTPS server address, including a custom port.")
+                    Text("The default server is ani.jkcoxson.com, a community server. You can enter your own HTTPS server address, including a custom port.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {

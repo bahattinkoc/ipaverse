@@ -69,7 +69,26 @@ of older settings.
 ## Metadata requests
 
 Downloading, version listing and version metadata share `AppStoreDownloadProduct`.
-The primary request remains the account pod's `volumeStoreDownloadProduct`, with
+
+Since October 2026 Apple's `bag.xml` maps `urlBag.volumeStoreDownloadProduct` to
+DownloadDispatch's `ent/download`. The pod's legacy endpoint then answers with the
+empty `authorized: false` response below, and the redownload fallback with an empty
+HTTP 403. The client therefore tries `ent/download` first, as ipatool does since
+3411d57. Only the HTTPS
+`downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download`
+endpoint, with no port, user info, query or fragment, is accepted. The request is
+always pinned to an external version ID and carries `X-Token`, `X-Apple-Store-Front`,
+the DSID headers, a serial derived from the GUID, and `kbsync`. The emulated StoreAgent
+generates kbsync from the GUID's six hardware bytes and the DSID, using the same
+pinned image and global context as macOS package decryption. Generation takes several
+seconds, so one blob per account and device is shared until Apple rejects it; a
+rejected cached blob is regenerated once. The request does not follow redirects. Its
+response must contain exactly one item that matches the app ID, external version ID
+and bundle ID, and has a package URL. License code 9610 and terms code 3038 start the
+existing purchase flow, and session failure codes require signing in again. Any other
+failure, a missing bag entry or a failed generation continues with the legacy chain.
+
+The legacy request is the account pod's `volumeStoreDownloadProduct`, with
 `serialNumber: "0"` and `externalVersionId` when the user selects a version.
 
 An HTTP 200 response with an explicitly empty `songList` and no Apple error is

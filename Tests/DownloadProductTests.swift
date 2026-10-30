@@ -342,6 +342,71 @@ enum DownloadProductTests {
             } catch AppStoreDownloadProductError.invalidEndpoint { try check(url != nil, "Unexpected missing endpoint error") }
             try check(calls == 2, "Sent update to unsupported endpoint")
         }
-        print("PASS: empty volume-store fallback, bounded catalog/update fallbacks, selected version and app validation, metadata/SINF and endpoint validation")
+        // ent/download, the bag's volumeStoreDownloadProduct since October 2026.
+        let entEndpoint = URL(string: "https://downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download")!
+        try check(AppStoreDownloadProduct.isSupportedEntDownloadEndpoint(entEndpoint), "Rejected the bag's ent/download endpoint")
+        for url in ["http://downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download",
+                    "https://evil.invalid/WebObjects/DownloadDispatch.woa/wa/ent/download",
+                    entEndpoint.absoluteString + "?guid=other", entEndpoint.absoluteString + "#fragment",
+                    "https://downloaddispatch.itunes.apple.com:443/WebObjects/DownloadDispatch.woa/wa/ent/download",
+                    "https://user@downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download",
+                    endpoint.absoluteString, updateEndpoint.absoluteString] {
+            try check(!AppStoreDownloadProduct.isSupportedEntDownloadEndpoint(URL(string: url)!), "Accepted unsafe ent/download endpoint \(url)")
+        }
+        let hardware: [UInt8] = [0x0A, 0x1B, 0x2C, 0x3D, 0x4E, 0x5F]
+        func entRequest(hardwareID: [UInt8] = hardware, version: String = "893759046") throws -> URLRequest {
+            try AppStoreDownloadProduct.entDownloadRequest(endpoint: entEndpoint, appID: 335162906, guid: "0A1B2C3D4E5F",
+                hardwareID: hardwareID, versionID: version, kbsync: "a2JzeW5j", storeFront: "143481-2,29",
+                passwordToken: "fixture-token", dsid: "12345")
+        }
+        let ent = try entRequest()
+        try check(ent.httpMethod == "POST" && ent.url?.query == "guid=0A1B2C3D4E5F" && ent.url?.path == entEndpoint.path, "ent/download URL changed")
+        for (header, value) in [("X-Token", "fixture-token"), ("X-Apple-Store-Front", "143481-2,29"), ("X-Dsid", "12345"),
+                                ("iCloud-DSID", "12345"), ("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")] {
+            try check(ent.value(forHTTPHeaderField: header) == value, "ent/download lost \(header)")
+        }
+        let entPayload = try PropertyListSerialization.propertyList(from: ent.httpBody!, format: nil) as! [String: Any]
+        try check(entPayload["kbsync"] as? String == "a2JzeW5j" && entPayload["guid"] as? String == "0A1B2C3D4E5F", "ent/download lost kbsync or GUID")
+        try check(entPayload["salableAdamId"] as? String == "335162906" && entPayload["externalVersionId"] as? String == "893759046", "ent/download changed app or version")
+        try check(entPayload["serialNumber"] as? String == Data([0x54, 0xC8, 0xB0, 0xA9, 0x88, 0x2C, 0x3D, 0x4E, 0x5F]).base64EncodedString(),
+                  "ent/download serial is not derived from the GUID")
+        for (hardwareID, version) in [([UInt8](hardware.prefix(5)), "893759046"), (hardware, ""), (hardware, "latest")] {
+            do {
+                _ = try entRequest(hardwareID: hardwareID, version: version)
+                throw MZFinanceTests.Failure(message: "Built ent/download without a six-byte GUID or pinned version")
+            } catch AppStoreDownloadProductError.invalidEndpoint { }
+        }
+        func entResponse(_ plist: [String: Any]) throws -> (Data, URLResponse) { try result(ent, plist) }
+        func entItem(version: Any = 893759046, bundle: String = "fixture.app", url: String? = "https://fixture.invalid/app.ipa") -> [String: Any] {
+            var item: [String: Any] = ["metadata": ["itemId": 335162906, "softwareVersionExternalIdentifier": version,
+                                                    "softwareVersionBundleId": bundle], "sinfs": [["id": 1, "sinf": Data([1, 2, 3])]]]
+            item["URL"] = url
+            return item
+        }
+        let (entData, entHTTP) = try entResponse(["songList": [entItem()]])
+        let accepted = try AppStoreDownloadProduct.entDownloadItem(data: entData, response: entHTTP, appID: 335162906,
+                                                                   versionID: "893759046", bundleID: "fixture.app")
+        try check(accepted["URL"] as? String == "https://fixture.invalid/app.ipa", "ent/download lost the package URL")
+        for songList in [[entItem(version: 1)], [entItem(bundle: "other.app")], [entItem(), entItem()], []] {
+            let (data, response) = try entResponse(["songList": songList])
+            do {
+                _ = try AppStoreDownloadProduct.entDownloadItem(data: data, response: response, appID: 335162906,
+                                                               versionID: "893759046", bundleID: "fixture.app")
+                throw MZFinanceTests.Failure(message: "Accepted a mismatched ent/download response")
+            } catch AppStoreDownloadProductError.mismatchedUpdate { }
+        }
+        do {
+            let (data, response) = try entResponse(["songList": [entItem(url: nil)]])
+            _ = try AppStoreDownloadProduct.entDownloadItem(data: data, response: response, appID: 335162906,
+                                                           versionID: "893759046", bundleID: "fixture.app")
+            throw MZFinanceTests.Failure(message: "Accepted an ent/download item without a package URL")
+        } catch AppStoreDownloadProductError.noItems { }
+        do {
+            let (data, response) = try entResponse(["failureType": "9610", "customerMessage": "License not found"])
+            _ = try AppStoreDownloadProduct.entDownloadItem(data: data, response: response, appID: 335162906,
+                                                           versionID: "893759046", bundleID: nil)
+            throw MZFinanceTests.Failure(message: "Swallowed an ent/download license failure")
+        } catch AppStoreDownloadProductError.failure(let code, _) { try check(code == "9610", "Lost ent/download failure code") }
+        print("PASS: empty volume-store fallback, bounded catalog/update fallbacks, selected version and app validation, metadata/SINF and endpoint validation, ent/download request and response")
     }
 }

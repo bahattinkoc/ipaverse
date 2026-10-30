@@ -55,6 +55,13 @@ final class MacPackageTests: XCTestCase {
         }
     }
 
+    /// Downloads Apple's assets on first use. Run with TEST_RUNNER_IPAVERSE_LIVE_SAP=1.
+    func testStoreAgentGeneratesKBSync() async throws {
+        guard ProcessInfo.processInfo.environment["IPAVERSE_LIVE_SAP"] == "1" else { throw XCTSkip("Set IPAVERSE_LIVE_SAP=1") }
+        let kbsync = try await SAPStoreAgent.kbsync(hardwareID: [0x0A, 0x1B, 0x2C, 0x3D, 0x4E, 0x5F], dsid: 12345)
+        XCTAssertFalse(kbsync.isEmpty)
+    }
+
     func testStoreAgentRejectsUnverifiedImageBeforeEmulation() throws {
         let empty = SAPAssetBundle(commerceKit: Data(), commerceCore: Data(), coreFP: Data(), coreFPICXS: Data())
         for data in [Data(), Data(repeating: 0, count: 2580176)] {

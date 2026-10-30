@@ -4,6 +4,11 @@
 
 ## User settings
 xcuserdata/
+*.xcuserstate
+
+## Build generated
+build/
+DerivedData/
 
 ## Obj-C/Swift specific
 *.hmap
@@ -63,3 +68,9 @@ fastlane/test_output
 
 # Frida script development dependencies
 node_modules/
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride

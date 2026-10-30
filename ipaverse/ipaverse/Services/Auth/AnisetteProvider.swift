@@ -23,10 +23,22 @@ import CryptoKit
 actor AnisetteSession {
     private var initialHeaders: [String: String]?
     private let refresh: @Sendable () async throws -> [String: String]
+    private let resync: (@Sendable (String) async throws -> [String: String])?
 
-    init(initialHeaders: [String: String], refresh: @escaping @Sendable () async throws -> [String: String]) {
+    init(initialHeaders: [String: String], refresh: @escaping @Sendable () async throws -> [String: String],
+         resync: (@Sendable (String) async throws -> [String: String])? = nil) {
         self.initialHeaders = initialHeaders
         self.refresh = refresh
+        self.resync = resync
+    }
+
+    /// Headers regenerated with GSA's resync data (hsc 434). Returns nil when the source
+    /// cannot resync (the local AOSKit source), so the caller reports the original GSA error.
+    func resyncedHeaders(sim: String) async throws -> [String: String]? {
+        guard let resync else { return nil }
+        let fresh = try await resync(sim)
+        try Task.checkCancellation()
+        return try Self.validate(fresh)
     }
 
     func headers() async throws -> [String: String] {
@@ -82,7 +94,9 @@ actor AnisetteProvider {
         let first = try AnisetteSession.validate(await remote.headers(for: identity))
         try Task.checkCancellation()
         let remote = self.remote
-        return AnisetteSession(initialHeaders: first) { try await remote.headers(for: identity) }
+        return AnisetteSession(initialHeaders: first,
+                               refresh: { try await remote.headers(for: identity) },
+                               resync: { sim in try await remote.headers(for: identity, sim: sim) })
     }
 
     private func localHeaders() throws -> [String: String] {
@@ -90,11 +104,7 @@ actor AnisetteProvider {
     }
 
     private func identity(for server: URL) async throws -> AnisetteIdentity {
-        if let saved = try store.load(server: server) {
-            let updated = saved.updatingClientIdentifier()
-            if updated.clientInfo != saved.clientInfo { try store.save(updated) }
-            return updated
-        }
+        if let saved = try store.load(server: server) { return saved }
         if let pending = provisioning[server] { return try await pending.value }
         let remote = self.remote
         let store = self.store

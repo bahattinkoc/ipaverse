@@ -84,7 +84,7 @@ enum MZFinanceAuthentication {
     private static func isAuthenticationURL(_ url: URL) -> Bool {
         guard url.scheme == "https", url.user == nil, url.password == nil,
               url.port == nil || url.port == 443, url.fragment == nil,
-              url.path == "/WebObjects/MZFinance.woa/wa/authenticate",
+              ["/WebObjects/MZFinance.woa/wa/authenticate", "/WebObjects/MZFinance.woa/wa/authenticate/"].contains(url.path),
               let host = url.host?.lowercased() else { return false }
         return host == "buy.itunes.apple.com" ||
             host.range(of: #"^p[0-9]+-buy\.itunes\.apple\.com$"#, options: .regularExpression) != nil

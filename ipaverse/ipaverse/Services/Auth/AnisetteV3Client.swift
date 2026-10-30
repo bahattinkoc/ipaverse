@@ -77,7 +77,14 @@ private struct AnisetteURLSocket: AnisetteSocket {
 
 protocol AnisetteRemoteSource: Sendable {
     func provision(server: URL) async throws -> AnisetteIdentity
-    func headers(for identity: AnisetteIdentity) async throws -> [String: String]
+    /// `sim` is the resync data that GSA returns with hsc 434. Pass nil for normal headers.
+    func headers(for identity: AnisetteIdentity, sim: String?) async throws -> [String: String]
+}
+
+extension AnisetteRemoteSource {
+    func headers(for identity: AnisetteIdentity) async throws -> [String: String] {
+        try await headers(for: identity, sim: nil)
+    }
 }
 
 /// Implements the V3 provisioning exchange, independently of Apple account authentication.
@@ -100,10 +107,18 @@ struct AnisetteV3Client: AnisetteRemoteSource {
         return url
     }
 
+    /// The server's ADI library comes from one platform (Android Apple Music, or Windows iTunes),
+    /// and Apple's GSA rejects a login with ec=-80045 when X-Mme-Client-Info names another one.
+    /// So the client info always comes from the server that generates the OTPs, never from this Mac.
+    func clientInfo(server: URL) async throws -> String {
+        let data = try await transport.data(for: URLRequest(url: server.appendingPathComponent("v3/client_info")))
+        return try field("client_info", in: try json(data, stage: "client info"), stage: "client info")
+    }
+
     func provision(server: URL) async throws -> AnisetteIdentity {
         let random = Data((0..<16).map { _ in UInt8.random(in: .min ... .max) })
         let localID = SHA256.hash(data: random).map { String(format: "%02X", $0) }.joined()
-        let clientInfo = AnisetteClientInfo.current
+        let clientInfo = try await clientInfo(server: server)
         let lookupURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!
         let lookupData = try await transport.data(for: appleRequest(url: lookupURL, localID: localID, clientInfo: clientInfo))
         let lookup = try plist(lookupData, stage: "provisioning lookup")
@@ -146,7 +161,7 @@ struct AnisetteV3Client: AnisetteRemoteSource {
                         outgoing["ptm"] = try field("ptm", in: response, stage: "finish provisioning")
                         outgoing["tk"] = try field("tk", in: response, stage: "finish provisioning")
                     default:
-                        return AnisetteIdentity(version: 1, server: server, localUserID: localID,
+                        return AnisetteIdentity(version: AnisetteIdentity.currentVersion, server: server, localUserID: localID,
                                                 deviceID: UUID().uuidString.uppercased(), clientInfo: clientInfo,
                                                 provisioningData: try field("adi_pb", in: reply, stage: "personalization"))
                     }
@@ -167,13 +182,18 @@ struct AnisetteV3Client: AnisetteRemoteSource {
         }
     }
 
-    func headers(for identity: AnisetteIdentity) async throws -> [String: String] {
+    func headers(for identity: AnisetteIdentity, sim: String?) async throws -> [String: String] {
         var request = URLRequest(url: identity.server.appendingPathComponent("v3/get_headers"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "identifier": identity.localUserID, "adi_pb": identity.provisioningData
-        ])
+        var body = ["identifier": identity.localUserID, "adi_pb": identity.provisioningData]
+        // A resync (GSA hsc 434) needs Apple's SIM plus the identity values that GSA already saw.
+        if let sim {
+            body["sim"] = sim
+            body["device_id"] = identity.deviceID
+            body["md_lu"] = identity.localUserID
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let data = try await transport.data(for: request)
         let response = try json(data, stage: "header generation")
         // Only known fields are accepted. The server cannot inject authentication headers.
@@ -184,7 +204,7 @@ struct AnisetteV3Client: AnisetteRemoteSource {
             "X-Apple-I-MD-LU": identity.localUserID,
             "X-Mme-Device-Id": identity.deviceID,
             "X-Apple-I-SRL-NO": "0",
-            "X-Mme-Client-Info": AnisetteClientInfo.replacingLegacyIdentifier(in: identity.clientInfo),
+            "X-Mme-Client-Info": identity.clientInfo,
             "X-Apple-I-Client-Time": ISO8601DateFormatter().string(from: Date()),
             "X-Apple-I-TimeZone": TimeZone.current.abbreviation() ?? "UTC",
             "X-Apple-Locale": Locale.current.appleAuthenticationIdentifier
@@ -256,17 +276,11 @@ enum AnisetteClientInfo {
     // September 2026. Keep the hardware/OS tuple and use the AuthKit daemon identity.
     private static let clientIdentifier = "com.apple.akd/1.0"
 
+    /// Client info for the local AOSKit source only. Remote identities use the server's value.
     static var current: String {
         let os = ProcessInfo.processInfo.operatingSystemVersion
         let version = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
         return "<\(systemString("hw.model"))> <macOS;\(version);\(systemString("kern.osversion"))> <com.apple.AuthKit/1 (\(clientIdentifier))>"
-    }
-
-    /// Older Keychain records retain their provisioned identity and host tuple.
-    /// Only the obsolete client token changes; no re-provisioning is necessary.
-    static func replacingLegacyIdentifier(in clientInfo: String) -> String {
-        clientInfo.replacingOccurrences(of: #"com\.apple\.dt\.Xcode/[^\s)>]+"#,
-                                         with: clientIdentifier, options: .regularExpression)
     }
 
     private static func systemString(_ name: String) -> String {

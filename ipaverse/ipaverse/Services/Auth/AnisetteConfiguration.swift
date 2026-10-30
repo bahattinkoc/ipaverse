@@ -22,13 +22,25 @@ struct AnisetteConfiguration: Equatable, Sendable {
 
     static let modeKey = "anisette.mode"
     static let serverKey = "anisette.serverURL"
-    static let defaultServer = "https://ani.sidestore.zip"
+    // A Windows-based V3 server. As of October 2026, GSA rejects anisette data from
+    // Android-based servers such as ani.sidestore.zip (iloader 2.3.8 made the same switch).
+    static let defaultServer = "https://ani.jkcoxson.com"
+    // Former defaults that GSA now rejects. Saving Advanced Sign-in Settings stored the
+    // default address even when unchanged, so 2.5.3 installs still carry it; GSA answers
+    // their sign-ins with HTTP 503. Custom servers are kept.
+    static let retiredDefaultServers: Set<String> = ["https://ani.sidestore.zip"]
     let mode: Mode
     let server: String
 
     static func load(from defaults: UserDefaults = .standard) -> Self {
         Self(mode: Mode(rawValue: defaults.string(forKey: modeKey) ?? "") ?? .automatic,
-             server: defaults.string(forKey: serverKey) ?? defaultServer)
+             server: resolvedServer(defaults.string(forKey: serverKey)))
+    }
+
+    static func resolvedServer(_ saved: String?) -> String {
+        guard let saved else { return defaultServer }
+        let normalized = (try? serverURL(saved).absoluteString) ?? saved
+        return retiredDefaultServers.contains(normalized) ? defaultServer : saved
     }
 
     static func serverURL(_ text: String) throws -> URL {

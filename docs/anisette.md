@@ -10,7 +10,11 @@ For overrides, open **Settings → Account → Advanced Sign-in Settings**.
 the configured V3 service directly. Previously saved modes and custom server
 addresses are preserved; only an unset or unrecognized mode defaults to Automatic.
 
-The default endpoint is `https://ani.sidestore.zip`, operated by SideStore.
+The default endpoint is `https://ani.jkcoxson.com`, a Windows-based community server.
+As of October 2026, Apple rejects anisette data from Android-based servers such as
+`https://ani.sidestore.zip` with GSA error -80045 or HTTP 503. Because that address
+was the previous default and was stored whenever the options were saved, a saved
+`https://ani.sidestore.zip` is treated as unset and resolves to the current default.
 You may enter your own HTTPS endpoint, including a port and path prefix.
 HTTP is accepted only for loopback (`localhost`, `127.0.0.1`, or `::1`), for a
 server running on this Mac. HTTP URLs elsewhere, embedded credentials, query
